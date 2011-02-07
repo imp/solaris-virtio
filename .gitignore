@@ -1,0 +1,5 @@
+.make.*
+Makefile-*.mk
+nbproject
+obj32
+obj64
