@@ -19,6 +19,7 @@
 
 #include <sys/types.h>
 #include <sys/cmn_err.h>
+#include <sys/pci.h>
 #include <sys/note.h>
 #include <sys/conf.h>
 #include <sys/devops.h>
@@ -33,12 +34,23 @@
 #include "virtionet.h"
 
 typedef struct {
-	dev_info_t	*dip;
-	mac_handle_t	mh;
-	uint8_t		addr[8];
+	dev_info_t		*dip;
+	caddr_t			headeraddr;
+	ddi_acc_handle_t	headerhandle;
+	mac_handle_t		mh;
+	uint8_t			addr[8];
 } virtionet_state_t;
 
 static void *virtionet_statep;
+
+/* Device attributes */
+static ddi_device_acc_attr_t virtio_devattr = {
+	.devacc_attr_version		= DDI_DEVICE_ATTR_V0,
+	.devacc_attr_endian_flags	= DDI_STRUCTURE_LE_ACC,
+	.devacc_attr_dataorder		= DDI_STRICTORDER_ACC,
+	.devacc_attr_access		= DDI_DEFAULT_ACC
+};
+
 
 /*
  * MAC callbacks
@@ -57,7 +69,7 @@ virtionet_start(void *arg)
 {
 	virtionet_state_t	*sp = arg;
 
-	return (0);
+	return (ENODEV);
 }
 
 static void
@@ -112,6 +124,12 @@ virtionet_getcapab(void *arg, mac_capab_t cap, void *cap_data)
 {
 	virtionet_state_t	*sp = arg;
 
+	switch (cap) {
+	case MAC_CAPAB_HCKSUM:
+	case MAC_CAPAB_LSO:
+	default:
+		return (B_FALSE);
+	}
 	return (B_TRUE);
 }
 
@@ -121,7 +139,7 @@ virtionet_setprop(void *arg, const char *prop_name, mac_prop_id_t prop_id,
 {
 	virtionet_state_t	*sp = arg;
 
-	return (0);
+	return (ENOTSUP);
 }
 
 static int
@@ -130,7 +148,7 @@ virtionet_getprop(void *arg, const char *prop_name, mac_prop_id_t prop_id,
 {
 	virtionet_state_t	*sp = arg;
 
-	return (0);
+	return (ENOTSUP);
 }
 
 static void
@@ -159,19 +177,61 @@ static mac_callbacks_t virtionet_mac_callbacks = {
 	.mc_propinfo	= virtionet_propinfo
 };
 
+
+/*
+ * Validate that the device in hand is indeed virtio network device
+ */
+static int
+virtionet_validate_pcidev(dev_info_t *dip)
+{
+	ddi_acc_handle_t	pcihdl;
+	int			rc;
+
+	rc = pci_config_setup(dip, &pcihdl);
+	if (rc != DDI_SUCCESS) {
+		return (DDI_FAILURE);
+	}
+
+	if (pci_config_get16(pcihdl, PCI_CONF_VENID) != VIRTIO_PCI_VENDOR) {
+		cmn_err(CE_WARN, "Incorrect PCI vendor id");
+		rc = DDI_FAILURE;
+	}
+
+	uint16_t devid = pci_config_get16(pcihdl, PCI_CONF_DEVID);
+
+	if ((devid < VIRTIO_PCI_DEVID_MIN) && (devid > VIRTIO_PCI_DEVID_MAX)) {
+		cmn_err(CE_WARN, "Incorrect PCI device id");
+		rc = DDI_FAILURE;
+	}
+
+	if (pci_config_get16(pcihdl, PCI_CONF_REVID) != VIRTIO_PCI_REV_ABIV0) {
+		cmn_err(CE_WARN, "Unsupported virtio ABI detected");
+		rc = DDI_FAILURE;
+	}
+
+	pci_config_teardown(&pcihdl);
+	return (rc);
+}
+
+
 static int
 virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
 	virtionet_state_t	*sp;
-	mac_register_t	*mp;
-	int		instance;
-	int		rc;
+	mac_register_t		*mp;
+	int			instance;
+	int			rc;
 
 	switch (cmd) {
 	case DDI_ATTACH:
 		break;
 	case DDI_RESUME:
 	default:
+		return (DDI_FAILURE);
+	}
+
+	/* Sanity check - make sure the device is really what we think it is */
+	if (virtionet_validate_pcidev(dip) != DDI_SUCCESS) {
 		return (DDI_FAILURE);
 	}
 
@@ -184,8 +244,17 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	ASSERT(sp);
 	sp->dip = dip;
 
+	/* Map virtionet PCI header */
+	rc = ddi_regs_map_setup(sp->dip, 1, &sp->headeraddr, 0, 0,
+	    &virtio_devattr, &sp->headerhandle);
+	if (rc != DDI_SUCCESS) {
+		ddi_soft_state_free(virtionet_statep, instance);
+		return (DDI_FAILURE);
+	}
+
 	mp = mac_alloc(MAC_VERSION);
 	if (mp == NULL) {
+		ddi_regs_map_free(&sp->headerhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
@@ -204,17 +273,7 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	rc = mac_register(mp, &sp->mh);
 	mac_free(mp);
 	if (rc != 0) {
-		ddi_soft_state_free(virtionet_statep, instance);
-		return (DDI_FAILURE);
-	}
-
-/*
-	rc = ddi_create_minor_node(dip, "ctl", S_IFCHR, instance, NT_NET, 0);
-*/
-
-	if (rc != DDI_SUCCESS) {
-		cmn_err(CE_WARN, "virtionet_attach: failed to create minor node");
-		mac_unregister(sp->mh);
+		ddi_regs_map_free(&sp->headerhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
@@ -246,26 +305,17 @@ virtionet_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 	ddi_remove_minor_node(dip, 0);
 	mac_unregister(sp->mh);
+	ddi_regs_map_free(&sp->headerhandle);
 	ddi_soft_state_free(virtionet_statep, instance);
 
 	return (DDI_SUCCESS);
 }
 
-
-static struct dev_ops virtionet_devops = {
-	.devo_rev	= DEVO_REV,
-	.devo_refcnt	= 0,
-	.devo_getinfo	= NULL,
-	.devo_identify	= nulldev,
-	.devo_probe	= nulldev,
-	.devo_attach	= virtionet_attach,
-	.devo_detach	= virtionet_detach,
-	.devo_reset	= nodev,
-	.devo_cb_ops	= NULL,
-	.devo_bus_ops	= NULL,
-	.devo_power	= NULL,
-	.devo_quiesce	= ddi_quiesce_not_supported
-};
+/*
+ * Stream information
+ */
+DDI_DEFINE_STREAM_OPS(virtionet_devops, nulldev, nulldev, virtionet_attach,
+    virtionet_detach, nodev, NULL, D_MP, NULL, ddi_quiesce_not_supported);
 
 
 static struct modldrv virtionet_modldrv = {
@@ -288,19 +338,17 @@ _init(void)
 {
 	int error;
 
-#ifdef	STAP_SOFT_STATE
-	error = ddi_soft_state_init(&virtionet_statep, sizeof (virtionet_state_t), 0);
+	error = ddi_soft_state_init(&virtionet_statep,
+	    sizeof (virtionet_state_t), 0);
 	if (error != 0) {
 		return (error);
 	}
-#endif
+
 	mac_init_ops(&virtionet_devops, "virtionet");
 	error = mod_install(&virtionet_modlinkage);
 	if (error != 0) {
 		mac_fini_ops(&virtionet_devops);
-#ifdef	STAP_SOFT_STATE
 		ddi_soft_state_fini(&virtionet_statep);
-#endif
 	}
 	return (error);
 }
@@ -313,9 +361,7 @@ _fini(void)
 	error = mod_remove(&virtionet_modlinkage);
 	if (error == 0) {
 		mac_fini_ops(&virtionet_devops);
-#ifdef	STAP_SOFT_STATE
 		ddi_soft_state_fini(&virtionet_statep);
-#endif
 	}
 	return (error);
 }

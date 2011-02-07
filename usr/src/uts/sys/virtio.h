@@ -38,6 +38,19 @@
  * See Virtio PCI Card Specification v0.8.10
  */
 
+/* Virtio PCI configuration definitions */
+#define	VIRTIO_PCI_VENDOR		0x1AF4
+#define	VIRTIO_PCI_DEVID_MIN		0x1000
+#define	VIRTIO_PCI_DEVID_MAX		0x103F
+#define	VIRTIO_PCI_SUBSYS_NETWORK	0x0001
+#define	VIRTIO_PCI_SUBSYS_BLOCK		0x0002
+#define	VIRTIO_PCI_SUBSYS_CONSOLE	0x0003
+#define	VIRTIO_PCI_SUBSYS_ENTROPY	0x0004
+#define	VIRTIO_PCI_SUBSYS_MEMORY	0x0005
+#define	VIRTIO_PCI_SUBSYS_IOMEMORY	0x0006
+#define	VIRTIO_PCI_SUBSYS_9P		0x0009
+#define	VIRTIO_PCI_REV_ABIV0		0x0000
+
 /* Virtio Header offsets */
 #define	VIRTIO_DEV_FEATURES		0x00	/* RO */
 #define	VIRTIO_GUEST_FEATURES		0x04	/* RW */
@@ -47,6 +60,7 @@
 #define	VIRTIO_QUEUE_NOTIFY		0x10	/* RW */
 #define	VIRTIO_DEVICE_STATUS		0x12	/* RW */
 #define	VIRTIO_ISR_STATUS		0x13	/* RW */
+
 
 /* Device Status bits */
 #define	VIRTIO_DEV_STATUS_ACK		0x01

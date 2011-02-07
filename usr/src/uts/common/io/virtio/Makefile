@@ -67,7 +67,6 @@ clean:
 install:
 	$(CP) $(TARGET32) /usr/kernel/drv
 	$(CP) $(TARGET64) /usr/kernel/drv/amd64
-	$(CP) $(TARGET.CONF) /usr/kernel/drv
 
 add_drv:
-	add_drv -vn virtionet
+	add_drv -i '"pci1af4,1"' -vu virtionet
