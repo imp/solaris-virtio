@@ -35,11 +35,30 @@
 
 typedef struct {
 	dev_info_t		*dip;
-	caddr_t			headeraddr;
-	ddi_acc_handle_t	headerhandle;
+	caddr_t			hdraddr;
+	ddi_acc_handle_t	hdrhandle;
 	mac_handle_t		mh;
 	uint8_t			addr[8];
 } virtionet_state_t;
+
+#define	VIRTIO_GET8(sp, x)	ddi_get8(sp->hdrhandle, sp->hdraddr + x)
+#define	VIRTIO_PUT8(sp, x, v)	ddi_put8(sp->hdrhandle, sp->hdraddr + x, v)
+#define	VIRTIO_GET16(sp, x)	ddi_get16(sp->hdrhandle, sp->hdraddr + x)
+#define	VIRTIO_PUT16(sp, x, v)	ddi_put16(sp->hdrhandle, sp->hdraddr + x, v)
+#define	VIRTIO_GET32(sp, x)	ddi_get32(sp->hdrhandle, sp->hdraddr + x)
+#define	VIRTIO_PUT32(sp, x, v)	ddi_put32(sp->hdrhandle, sp->hdraddr + x, v)
+
+#define	VIRTIO_DEV_RESET(sp)	\
+	VIRTIO_PUT8(sp, VIRTIO_DEVICE_STATUS, 0)
+#define	VIRTIO_DEV_ACK(sp)	\
+	VIRTIO_PUT8(sp, VIRTIO_DEVICE_STATUS, VIRTIO_DEV_STATUS_ACK)
+#define	VIRTIO_DEV_DRIVER(sp)	\
+	VIRTIO_PUT8(sp, VIRTIO_DEVICE_STATUS, VIRTIO_DEV_STATUS_DRIVER)
+#define	VIRTIO_DEV_DRIVER_OK(sp)\
+	VIRTIO_PUT8(sp, VIRTIO_DEVICE_STATUS, VIRTIO_DEV_STATUS_DRIVER_OK)
+#define	VIRTIO_DEV_FAILED(sp)	\
+	VIRTIO_PUT8(sp, VIRTIO_DEVICE_STATUS, VIRTIO_DEV_STATUS_FAILED)
+
 
 static void *virtionet_statep;
 
@@ -245,16 +264,46 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	sp->dip = dip;
 
 	/* Map virtionet PCI header */
-	rc = ddi_regs_map_setup(sp->dip, 1, &sp->headeraddr, 0, 0,
-	    &virtio_devattr, &sp->headerhandle);
+	rc = ddi_regs_map_setup(sp->dip, 1, &sp->hdraddr, 0, 0,
+	    &virtio_devattr, &sp->hdrhandle);
 	if (rc != DDI_SUCCESS) {
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
 
+	VIRTIO_DEV_RESET(sp);
+	VIRTIO_DEV_ACK(sp);
+
+	cmn_err(CE_CONT, "Device Features 0x%X\n",
+	    VIRTIO_GET32(sp, VIRTIO_DEVICE_FEATURES));
+	cmn_err(CE_CONT, "Guest Features 0x%X\n",
+	    VIRTIO_GET32(sp, VIRTIO_GUEST_FEATURES));
+	cmn_err(CE_CONT, "Device Status 0x%X\n",
+	    VIRTIO_GET8(sp, VIRTIO_DEVICE_STATUS));
+	cmn_err(CE_CONT, "ISR Status 0x%X\n",
+	    VIRTIO_GET8(sp, VIRTIO_ISR_STATUS));
+
+	cmn_err(CE_CONT, "Selecting queue 0\n");
+	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 0);
+	cmn_err(CE_CONT, "Queue size 0x%X\n",
+	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
+
+	cmn_err(CE_CONT, "Selecting queue 1\n");
+	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 1);
+	cmn_err(CE_CONT, "Queue size 0x%X\n",
+	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
+
+	cmn_err(CE_CONT, "Selecting queue 2\n");
+	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 2);
+	cmn_err(CE_CONT, "Queue size 0x%X\n",
+	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
+
+	VIRTIO_DEV_DRIVER(sp);
+
+
 	mp = mac_alloc(MAC_VERSION);
 	if (mp == NULL) {
-		ddi_regs_map_free(&sp->headerhandle);
+		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
@@ -273,7 +322,7 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	rc = mac_register(mp, &sp->mh);
 	mac_free(mp);
 	if (rc != 0) {
-		ddi_regs_map_free(&sp->headerhandle);
+		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
@@ -305,7 +354,7 @@ virtionet_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 	ddi_remove_minor_node(dip, 0);
 	mac_unregister(sp->mh);
-	ddi_regs_map_free(&sp->headerhandle);
+	ddi_regs_map_free(&sp->hdrhandle);
 	ddi_soft_state_free(virtionet_statep, instance);
 
 	return (DDI_SUCCESS);
