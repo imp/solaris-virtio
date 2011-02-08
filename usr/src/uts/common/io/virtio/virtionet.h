@@ -28,6 +28,13 @@ extern "C" {
 #define	VLAN_TAGSZ	0x4
 #endif
 
+/* Bitfield of features supported by our implementation */
+#define	VIRTIONET_GUEST_FEATURES	\
+			( \
+			VIRTIO_NET_F_MAC \
+			| VIRTIO_NET_F_STATUS \
+			| VIRTIO_NET_F_CTRL_VQ \
+			)
 #ifdef __cplusplus
 }
 #endif

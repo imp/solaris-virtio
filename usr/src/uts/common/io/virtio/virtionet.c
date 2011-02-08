@@ -37,6 +37,7 @@ typedef struct {
 	dev_info_t		*dip;
 	caddr_t			hdraddr;
 	ddi_acc_handle_t	hdrhandle;
+	uint32_t		features;
 	mac_handle_t		mh;
 	uint8_t			addr[8];
 } virtionet_state_t;
@@ -197,11 +198,59 @@ static mac_callbacks_t virtionet_mac_callbacks = {
 };
 
 
+/* Register virtionet driver with GLDv3 framework */
+static int
+virtionet_mac_register(virtionet_state_t *sp)
+{
+	mac_register_t		*mp;
+	int			rc;
+
+	mp = mac_alloc(MAC_VERSION);
+	if (mp == NULL) {
+		return (DDI_FAILURE);
+	}
+
+	mp->m_type_ident	= MAC_PLUGIN_IDENT_ETHER;
+	mp->m_driver		= sp;
+	mp->m_dip		= sp->dip;
+	mp->m_instance		= 0;
+	mp->m_src_addr		= sp->addr;
+	mp->m_dst_addr		= NULL;
+	mp->m_callbacks		= &virtionet_mac_callbacks;
+	mp->m_min_sdu		= 0;
+	mp->m_max_sdu		= ETHERMTU;
+	mp->m_margin		= VLAN_TAGSZ;
+
+	rc = mac_register(mp, &sp->mh);
+	mac_free(mp);
+	if (rc != 0) {
+		return (DDI_FAILURE);
+	}
+
+	return (DDI_SUCCESS);
+}
+
+
+/* Unregister virtionet driver from GLDv3 framework */
+static int
+virtionet_mac_unregister(virtionet_state_t *sp)
+{
+	int			rc;
+
+	rc = mac_unregister(sp->mh);
+	if (rc != 0) {
+		return (DDI_FAILURE);
+	}
+
+	return (DDI_SUCCESS);
+}
+
+
 /*
  * Validate that the device in hand is indeed virtio network device
  */
 static int
-virtionet_validate_pcidev(dev_info_t *dip)
+virtio_validate_pcidev(dev_info_t *dip)
 {
 	ddi_acc_handle_t	pcihdl;
 	int			rc;
@@ -233,47 +282,12 @@ virtionet_validate_pcidev(dev_info_t *dip)
 }
 
 
+/*
+ * Validate that the device in hand is indeed virtio network device
+ */
 static int
-virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
+virtio_validate_netdev(virtionet_state_t *sp)
 {
-	virtionet_state_t	*sp;
-	mac_register_t		*mp;
-	int			instance;
-	int			rc;
-
-	switch (cmd) {
-	case DDI_ATTACH:
-		break;
-	case DDI_RESUME:
-	default:
-		return (DDI_FAILURE);
-	}
-
-	/* Sanity check - make sure the device is really what we think it is */
-	if (virtionet_validate_pcidev(dip) != DDI_SUCCESS) {
-		return (DDI_FAILURE);
-	}
-
-	instance = ddi_get_instance(dip);
-	if (ddi_soft_state_zalloc(virtionet_statep, instance) != DDI_SUCCESS) {
-		return (DDI_FAILURE);
-	}
-
-	sp = ddi_get_soft_state(virtionet_statep, instance);
-	ASSERT(sp);
-	sp->dip = dip;
-
-	/* Map virtionet PCI header */
-	rc = ddi_regs_map_setup(sp->dip, 1, &sp->hdraddr, 0, 0,
-	    &virtio_devattr, &sp->hdrhandle);
-	if (rc != DDI_SUCCESS) {
-		ddi_soft_state_free(virtionet_statep, instance);
-		return (DDI_FAILURE);
-	}
-
-	VIRTIO_DEV_RESET(sp);
-	VIRTIO_DEV_ACK(sp);
-
 	cmn_err(CE_CONT, "Device Features 0x%X\n",
 	    VIRTIO_GET32(sp, VIRTIO_DEVICE_FEATURES));
 	cmn_err(CE_CONT, "Guest Features 0x%X\n",
@@ -298,30 +312,95 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	cmn_err(CE_CONT, "Queue size 0x%X\n",
 	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
 
+	return (DDI_SUCCESS);
+}
+
+
+/*
+ * Negotiate the feature set with the device
+ * Return
+ *        DDI_SUCCESS if succesfuly negotiated non-zero feature set
+ *        DDI_FAILURE otherwise
+ */
+static int
+virtionet_negotiate_features(virtionet_state_t *sp)
+{
+	sp->features = VIRTIO_GET32(sp, VIRTIO_DEVICE_FEATURES);
+	sp->features &= VIRTIONET_GUEST_FEATURES;
+	if (sp->features != 0) {
+		/* If there any features we support let device know them */
+		VIRTIO_PUT32(sp, VIRTIO_GUEST_FEATURES, sp->features);
+		return (DDI_SUCCESS);
+	} else {
+		/* otherwise report failure to negotiate anything */
+		return (DDI_FAILURE);
+	}
+}
+
+
+static int
+virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
+{
+	virtionet_state_t	*sp;
+	int			instance;
+	int			rc;
+
+	switch (cmd) {
+	case DDI_ATTACH:
+		break;
+	case DDI_RESUME:
+	default:
+		return (DDI_FAILURE);
+	}
+
+	/* Sanity check - make sure this is indeed virtio PCI device */
+	if (virtio_validate_pcidev(dip) != DDI_SUCCESS) {
+		return (DDI_FAILURE);
+	}
+
+	instance = ddi_get_instance(dip);
+	if (ddi_soft_state_zalloc(virtionet_statep, instance) != DDI_SUCCESS) {
+		return (DDI_FAILURE);
+	}
+
+	sp = ddi_get_soft_state(virtionet_statep, instance);
+	ASSERT(sp);
+	sp->dip = dip;
+
+	/* Map virtionet PCI header */
+	rc = ddi_regs_map_setup(sp->dip, 1, &sp->hdraddr, 0, 0,
+	    &virtio_devattr, &sp->hdrhandle);
+	if (rc != DDI_SUCCESS) {
+		ddi_soft_state_free(virtionet_statep, instance);
+		return (DDI_FAILURE);
+	}
+
+	/* Reset device - we are going to re-negotiate feature set */
+	VIRTIO_DEV_RESET(sp);
+
+	/* Acknowledge the presense of the device */
+	VIRTIO_DEV_ACK(sp);
+
+	rc = virtio_validate_netdev(sp);
+	if (rc != DDI_SUCCESS) {
+		ddi_regs_map_free(&sp->hdrhandle);
+		ddi_soft_state_free(virtionet_statep, instance);
+		return (DDI_FAILURE);
+	}
+	/* We know how to drive this device */
 	VIRTIO_DEV_DRIVER(sp);
 
-
-	mp = mac_alloc(MAC_VERSION);
-	if (mp == NULL) {
+	rc = virtionet_negotiate_features(sp);
+	if (rc != DDI_SUCCESS) {
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
 
-	mp->m_type_ident	= MAC_PLUGIN_IDENT_ETHER;
-	mp->m_driver		= sp;
-	mp->m_dip		= sp->dip;
-	mp->m_instance		= 0;
-	mp->m_src_addr		= sp->addr;
-	mp->m_dst_addr		= NULL;
-	mp->m_callbacks		= &virtionet_mac_callbacks;
-	mp->m_min_sdu		= 0;
-	mp->m_max_sdu		= ETHERMTU;
-	mp->m_margin		= VLAN_TAGSZ;
+	VIRTIO_DEV_DRIVER_OK(sp);
 
-	rc = mac_register(mp, &sp->mh);
-	mac_free(mp);
-	if (rc != 0) {
+	rc = virtionet_mac_register(sp);
+	if (rc != DDI_SUCCESS) {
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
@@ -337,7 +416,8 @@ static int
 virtionet_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 {
 	virtionet_state_t	*sp;
-	int		instance;
+	int			instance;
+	int			rc;
 
 	switch (cmd) {
 	case DDI_DETACH:
@@ -352,8 +432,11 @@ virtionet_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 	ASSERT(sp);
 
-	ddi_remove_minor_node(dip, 0);
-	mac_unregister(sp->mh);
+	rc = virtionet_mac_unregister(sp);
+	if (rc != DDI_SUCCESS) {
+		return (DDI_FAILURE);
+	}
+
 	ddi_regs_map_free(&sp->hdrhandle);
 	ddi_soft_state_free(virtionet_statep, instance);
 
