@@ -27,6 +27,7 @@
 #include <sys/mac.h>
 #include <sys/mac_provider.h>
 #include <sys/mac_ether.h>
+#include <sys/ethernet.h>
 #include <sys/virtio.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
@@ -34,13 +35,27 @@
 #include "virtionet.h"
 
 typedef struct {
+	ddi_dma_handle_t	hdl;
+	ddi_acc_handle_t	acchdl;
+	caddr_t			addr;
+	size_t			len;
+	ddi_dma_cookie_t	cookie;
+	uint_t			ccount;
+} virtqueue_t;
+
+
+typedef struct {
 	dev_info_t		*dip;
 	caddr_t			hdraddr;
 	ddi_acc_handle_t	hdrhandle;
+	virtqueue_t		*rxq;
+	virtqueue_t		*txq;
+	virtqueue_t		*ctlq;
 	uint32_t		features;
 	mac_handle_t		mh;
-	uint8_t			addr[8];
+	ether_addr_t		addr;
 } virtionet_state_t;
+
 
 #define	VIRTIO_GET8(sp, x)	ddi_get8(sp->hdrhandle, \
 				    (uint8_t *)(sp->hdraddr + x))
@@ -71,15 +86,6 @@ typedef struct {
 
 
 static void *virtionet_statep;
-
-/* Device attributes */
-static ddi_device_acc_attr_t virtio_devattr = {
-	.devacc_attr_version		= DDI_DEVICE_ATTR_V0,
-	.devacc_attr_endian_flags	= DDI_STRUCTURE_LE_ACC,
-	.devacc_attr_dataorder		= DDI_STRICTORDER_ACC,
-	.devacc_attr_access		= DDI_DEFAULT_ACC
-};
-
 
 /*
  * MAC callbacks
@@ -187,6 +193,7 @@ virtionet_propinfo(void *arg, const char *prop_name, mac_prop_id_t prop_id,
 	virtionet_state_t	*sp = arg;
 
 }
+
 
 #define	VIRTIONET_CALLBACKS	(MC_IOCTL | MC_GETCAPAB | MC_PROPERTIES)
 
@@ -347,6 +354,130 @@ virtionet_negotiate_features(virtionet_state_t *sp)
 }
 
 
+/* Device attributes */
+static ddi_device_acc_attr_t virtio_devattr = {
+	.devacc_attr_version		= DDI_DEVICE_ATTR_V0,
+	.devacc_attr_endian_flags	= DDI_STRUCTURE_LE_ACC,
+	.devacc_attr_dataorder		= DDI_STRICTORDER_ACC,
+	.devacc_attr_access		= DDI_DEFAULT_ACC
+};
+
+
+/* virtqueue buffer access attributes */
+static ddi_device_acc_attr_t virtio_qattr = {
+	.devacc_attr_version		= DDI_DEVICE_ATTR_V0,
+	.devacc_attr_endian_flags	= DDI_NEVERSWAP_ACC,
+	.devacc_attr_dataorder		= DDI_STRICTORDER_ACC,
+	.devacc_attr_access		= DDI_DEFAULT_ACC
+};
+
+
+static ddi_dma_attr_t vq_dma_attr = {
+	.dma_attr_version		= DMA_ATTR_V0,
+        .dma_attr_addr_lo		= 0,
+        .dma_attr_addr_hi		= 0xFFFFFFFFU,
+        .dma_attr_count_max		= 0xFFFFFFFFU,
+        .dma_attr_align			= 4096,
+        .dma_attr_burstsizes		= 0x3F,		/* XXX */
+        .dma_attr_minxfer		= 1,		/* XXX */
+        .dma_attr_maxxfer		= 0xFFFFFFFFU,	/* XXX */
+        .dma_attr_seg			= 0xFFFFFFFFU,	/* XXX */
+        .dma_attr_sgllen		= 1,		/* XXX */
+        .dma_attr_granular		= 1,		/* XXX */
+        .dma_attr_flags			= DDI_DMA_FORCE_PHYSICAL
+};
+
+
+static virtqueue_t *
+virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
+{
+	virtqueue_t		*vqp = NULL;
+	size_t			len = qsize * 16; /* XXX FIX ME */
+	int			rc;
+
+	vqp = kmem_zalloc(sizeof (*vqp), KM_SLEEP);
+
+	vq_dma_attr.dma_attr_flags |= DDI_DMA_FORCE_PHYSICAL;
+
+	rc = ddi_dma_alloc_handle(sp->dip, &vq_dma_attr, DDI_DMA_SLEEP,
+	    NULL, &vqp->hdl);
+
+	if (rc == DDI_DMA_BADATTR) {
+		vq_dma_attr.dma_attr_flags &= (~DDI_DMA_FORCE_PHYSICAL);
+		rc = ddi_dma_alloc_handle(sp->dip, &vq_dma_attr, DDI_DMA_SLEEP,
+		    NULL, &vqp->hdl);
+	}
+
+	if (rc != DDI_SUCCESS) {
+		kmem_free(vqp, sizeof (*vqp));
+		return (NULL);
+	}
+
+	rc = ddi_dma_mem_alloc(vqp->hdl, len, &virtio_qattr, DDI_DMA_CONSISTENT,
+	    DDI_DMA_SLEEP, NULL, &vqp->addr, &vqp->len, &vqp->acchdl);
+	if (rc != DDI_SUCCESS) {
+		ddi_dma_free_handle(&vqp->hdl);
+		kmem_free(vqp, sizeof (*vqp));
+		return (NULL);
+	}
+
+	rc = ddi_dma_addr_bind_handle(vqp->hdl, NULL, vqp->addr, vqp->len,
+	    DDI_DMA_RDWR | DDI_DMA_CONSISTENT, DDI_DMA_SLEEP, NULL,
+	    &vqp->cookie, &vqp->ccount);
+	if (rc != DDI_DMA_MAPPED) {
+                ddi_dma_mem_free(&vqp->acchdl);
+		ddi_dma_free_handle(&vqp->hdl);
+		kmem_free(vqp, sizeof (*vqp));
+		return (NULL);
+	}
+
+	return (vqp);
+}
+
+
+static void
+virtio_vq_teardown(virtqueue_t *vqp)
+{
+	if (vqp != NULL) {
+                (void) ddi_dma_unbind_handle(vqp->hdl);
+                ddi_dma_mem_free(&vqp->acchdl);
+		ddi_dma_free_handle(&vqp->hdl);
+		kmem_free(vqp, sizeof (*vqp));
+	}
+}
+
+
+static int
+virtionet_vq_setup(virtionet_state_t *sp)
+{
+	int			rc;
+
+	sp->rxq = virtio_vq_setup(sp, 0x100);
+	sp->txq = virtio_vq_setup(sp, 0x100);
+	sp->ctlq = virtio_vq_setup(sp, 0x10);
+
+	if ((sp->rxq == NULL) || (sp->txq == NULL) || (sp->ctlq == NULL)) {
+		virtio_vq_teardown(sp->rxq);
+		virtio_vq_teardown(sp->txq);
+		virtio_vq_teardown(sp->ctlq);
+		sp->rxq = sp->txq = sp->ctlq = NULL;
+		return (DDI_FAILURE);
+	}
+
+	return (DDI_SUCCESS);
+}
+
+
+static void
+virtionet_vq_teardown(virtionet_state_t *sp)
+{
+	virtio_vq_teardown(sp->rxq);
+	virtio_vq_teardown(sp->txq);
+	virtio_vq_teardown(sp->ctlq);
+	sp->rxq = sp->txq = sp->ctlq = NULL;
+}
+
+
 static int
 virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
@@ -406,10 +537,18 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
+	rc = virtionet_vq_setup(sp);
+	if (rc != DDI_SUCCESS) {
+		ddi_regs_map_free(&sp->hdrhandle);
+		ddi_soft_state_free(virtionet_statep, instance);
+		return (DDI_FAILURE);
+	}
+	/* XXX Should we move it to mc_start() ? */
 	VIRTIO_DEV_DRIVER_OK(sp);
 
 	rc = virtionet_mac_register(sp);
 	if (rc != DDI_SUCCESS) {
+		virtionet_vq_teardown(sp);
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
@@ -446,6 +585,7 @@ virtionet_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
+	virtionet_vq_teardown(sp);
 	ddi_regs_map_free(&sp->hdrhandle);
 	ddi_soft_state_free(virtionet_statep, instance);
 
