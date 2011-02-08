@@ -42,12 +42,21 @@ typedef struct {
 	uint8_t			addr[8];
 } virtionet_state_t;
 
-#define	VIRTIO_GET8(sp, x)	ddi_get8(sp->hdrhandle, sp->hdraddr + x)
-#define	VIRTIO_PUT8(sp, x, v)	ddi_put8(sp->hdrhandle, sp->hdraddr + x, v)
-#define	VIRTIO_GET16(sp, x)	ddi_get16(sp->hdrhandle, sp->hdraddr + x)
-#define	VIRTIO_PUT16(sp, x, v)	ddi_put16(sp->hdrhandle, sp->hdraddr + x, v)
-#define	VIRTIO_GET32(sp, x)	ddi_get32(sp->hdrhandle, sp->hdraddr + x)
-#define	VIRTIO_PUT32(sp, x, v)	ddi_put32(sp->hdrhandle, sp->hdraddr + x, v)
+#define	VIRTIO_GET8(sp, x)	ddi_get8(sp->hdrhandle, \
+				    (uint8_t *)(sp->hdraddr + x))
+#define	VIRTIO_PUT8(sp, x, v)	ddi_put8(sp->hdrhandle, \
+				    (uint8_t *)(sp->hdraddr + x), \
+				    (uint8_t)(v))
+#define	VIRTIO_GET16(sp, x)	ddi_get16(sp->hdrhandle, \
+				    (uint16_t *)(sp->hdraddr + x))
+#define	VIRTIO_PUT16(sp, x, v)	ddi_put16(sp->hdrhandle, \
+				    (uint16_t *)(sp->hdraddr + x), \
+				    (uint16_t)(v))
+#define	VIRTIO_GET32(sp, x)	ddi_get32(sp->hdrhandle, \
+				    (uint32_t *)(sp->hdraddr + x))
+#define	VIRTIO_PUT32(sp, x, v)	ddi_put32(sp->hdrhandle, \
+				    (uint32_t *)(sp->hdraddr + x), \
+				    (uint32_t)(v))
 
 #define	VIRTIO_DEV_RESET(sp)	\
 	VIRTIO_PUT8(sp, VIRTIO_DEVICE_STATUS, 0)
