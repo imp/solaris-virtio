@@ -374,17 +374,17 @@ static ddi_device_acc_attr_t virtio_qattr = {
 
 static ddi_dma_attr_t vq_dma_attr = {
 	.dma_attr_version		= DMA_ATTR_V0,
-        .dma_attr_addr_lo		= 0,
-        .dma_attr_addr_hi		= 0xFFFFFFFFU,
-        .dma_attr_count_max		= 0xFFFFFFFFU,
-        .dma_attr_align			= 4096,
-        .dma_attr_burstsizes		= 0x3F,		/* XXX */
-        .dma_attr_minxfer		= 1,		/* XXX */
-        .dma_attr_maxxfer		= 0xFFFFFFFFU,	/* XXX */
-        .dma_attr_seg			= 0xFFFFFFFFU,	/* XXX */
-        .dma_attr_sgllen		= 1,		/* XXX */
-        .dma_attr_granular		= 1,		/* XXX */
-        .dma_attr_flags			= DDI_DMA_FORCE_PHYSICAL
+	.dma_attr_addr_lo		= 0,
+	.dma_attr_addr_hi		= 0xFFFFFFFFU,
+	.dma_attr_count_max		= 0xFFFFFFFFU,
+	.dma_attr_align			= 4096,
+	.dma_attr_burstsizes		= 0x3F,		/* XXX */
+	.dma_attr_minxfer		= 1,		/* XXX */
+	.dma_attr_maxxfer		= 0xFFFFFFFFU,	/* XXX */
+	.dma_attr_seg			= 0xFFFFFFFFU,	/* XXX */
+	.dma_attr_sgllen		= 1,		/* XXX */
+	.dma_attr_granular		= 1,		/* XXX */
+	.dma_attr_flags			= DDI_DMA_FORCE_PHYSICAL
 };
 
 
@@ -425,7 +425,7 @@ virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
 	    DDI_DMA_RDWR | DDI_DMA_CONSISTENT, DDI_DMA_SLEEP, NULL,
 	    &vqp->cookie, &vqp->ccount);
 	if (rc != DDI_DMA_MAPPED) {
-                ddi_dma_mem_free(&vqp->acchdl);
+		ddi_dma_mem_free(&vqp->acchdl);
 		ddi_dma_free_handle(&vqp->hdl);
 		kmem_free(vqp, sizeof (*vqp));
 		return (NULL);
@@ -439,8 +439,8 @@ static void
 virtio_vq_teardown(virtqueue_t *vqp)
 {
 	if (vqp != NULL) {
-                (void) ddi_dma_unbind_handle(vqp->hdl);
-                ddi_dma_mem_free(&vqp->acchdl);
+		(void) ddi_dma_unbind_handle(vqp->hdl);
+		ddi_dma_mem_free(&vqp->acchdl);
 		ddi_dma_free_handle(&vqp->hdl);
 		kmem_free(vqp, sizeof (*vqp));
 	}
