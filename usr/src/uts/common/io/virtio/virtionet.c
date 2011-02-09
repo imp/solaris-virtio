@@ -356,6 +356,15 @@ virtionet_negotiate_features(virtionet_state_t *sp)
 }
 
 
+static uint_t
+virtionet_intr(caddr_t arg1, caddr_t arg2)
+{
+	virtionet_state_t	*sp = (virtionet_state_t *)arg1;
+
+	return (DDI_INTR_UNCLAIMED);
+}
+
+
 /* Device attributes */
 static ddi_device_acc_attr_t virtio_devattr = {
 	.devacc_attr_version		= DDI_DEVICE_ATTR_V0,
@@ -453,14 +462,52 @@ static int
 virtio_fixed_intr_setup(virtionet_state_t *sp)
 {
 	int			rc;
-	int			actual;
+	int			nintr;
+	uint_t			pri;
 
-	rc = ddi_intr_alloc(sp->dip, &sp->ihandle, DDI_INTR_TYPE_FIXED, 0, 1,
-	    &actual, DDI_INTR_ALLOC_NORMAL);
+	rc = ddi_intr_get_nintrs(sp->dip, DDI_INTR_TYPE_FIXED, &nintr);
 	if (rc != DDI_SUCCESS) {
 		return (DDI_FAILURE);
 	}
 
+	ASSERT(nintr == 1);
+
+	rc = ddi_intr_alloc(sp->dip, &sp->ihandle, DDI_INTR_TYPE_FIXED, 0, 1,
+	    &nintr, DDI_INTR_ALLOC_NORMAL);
+	if (rc != DDI_SUCCESS) {
+		return (DDI_FAILURE);
+	}
+
+	ASSERT(actual == 1);
+
+	rc = ddi_intr_get_pri(sp->ihandle, &pri);
+	if (rc != DDI_SUCCESS) {
+		(void) ddi_intr_free(sp->ihandle);
+		return (DDI_FAILURE);
+	}
+
+	cmn_err(CE_NOTE, "Supported interrupt priority = %d(%d)",
+	    pri, ddi_intr_get_hilevel_pri());
+
+	/* Test for high level mutex */
+	if (pri >= ddi_intr_get_hilevel_pri()) {
+		cmn_err(CE_WARN, "Hi level interrupt not supported");
+		(void) ddi_intr_free(sp->ihandle);
+		return (DDI_FAILURE);
+	}
+
+	rc = ddi_intr_add_handler(sp->ihandle, virtionet_intr, sp, NULL);
+	if (rc != DDI_SUCCESS) {
+		(void) ddi_intr_free(sp->ihandle);
+		return (DDI_FAILURE);
+	}
+
+	rc = ddi_intr_enable(sp->ihandle);
+	if (rc != DDI_SUCCESS) {
+		(void) ddi_intr_remove_handler(sp->ihandle);
+		(void) ddi_intr_free(sp->ihandle);
+		return (DDI_FAILURE);
+	}
 	return (DDI_SUCCESS);
 }
 
@@ -470,6 +517,8 @@ virtio_intr_teardown(virtionet_state_t *sp)
 {
 	int			rc;
 
+	rc = ddi_intr_disable(sp->ihandle);
+	rc = ddi_intr_remove_handler(sp->ihandle);
 	rc = ddi_intr_free(sp->ihandle);
 	return (DDI_SUCCESS);
 }
@@ -478,8 +527,6 @@ virtio_intr_teardown(virtionet_state_t *sp)
 static int
 virtionet_vq_setup(virtionet_state_t *sp)
 {
-	int			rc;
-
 	sp->rxq = virtio_vq_setup(sp, 0x100);
 	sp->txq = virtio_vq_setup(sp, 0x100);
 	sp->ctlq = virtio_vq_setup(sp, 0x10);
