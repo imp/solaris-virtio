@@ -29,6 +29,7 @@
 #include <sys/mac_ether.h>
 #include <sys/ethernet.h>
 #include <sys/virtio.h>
+#include <sys/ddi_intr.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
 
@@ -51,6 +52,7 @@ typedef struct {
 	virtqueue_t		*rxq;
 	virtqueue_t		*txq;
 	virtqueue_t		*ctlq;
+	ddi_intr_handle_t	ihandle;
 	uint32_t		features;
 	mac_handle_t		mh;
 	ether_addr_t		addr;
@@ -448,6 +450,32 @@ virtio_vq_teardown(virtqueue_t *vqp)
 
 
 static int
+virtio_fixed_intr_setup(virtionet_state_t *sp)
+{
+	int			rc;
+	int			actual;
+
+	rc = ddi_intr_alloc(sp->dip, &sp->ihandle, DDI_INTR_TYPE_FIXED, 0, 1,
+	    &actual, DDI_INTR_ALLOC_NORMAL);
+	if (rc != DDI_SUCCESS) {
+		return (DDI_FAILURE);
+	}
+
+	return (DDI_SUCCESS);
+}
+
+
+static int
+virtio_intr_teardown(virtionet_state_t *sp)
+{
+	int			rc;
+
+	rc = ddi_intr_free(sp->ihandle);
+	return (DDI_SUCCESS);
+}
+
+
+static int
 virtionet_vq_setup(virtionet_state_t *sp)
 {
 	int			rc;
@@ -475,6 +503,42 @@ virtionet_vq_teardown(virtionet_state_t *sp)
 	virtio_vq_teardown(sp->txq);
 	virtio_vq_teardown(sp->ctlq);
 	sp->rxq = sp->txq = sp->ctlq = NULL;
+}
+
+
+static int
+virtionet_intr_setup(virtionet_state_t *sp)
+{
+	int			rc;
+	int			itypes;
+
+
+	rc = ddi_intr_get_supported_types(sp->dip, &itypes);
+	if (rc != DDI_SUCCESS) {
+		return (DDI_FAILURE);
+	}
+
+	if (itypes & DDI_INTR_TYPE_MSIX) {
+		cmn_err(CE_NOTE, "Detected MSIX interrupt support");
+	}
+	if (itypes & DDI_INTR_TYPE_MSI) {
+		cmn_err(CE_NOTE, "Detected MSI interrupt support");
+	}
+	if (itypes & DDI_INTR_TYPE_FIXED) {
+		cmn_err(CE_NOTE, "Detected FIXED interrupt support");
+	}
+	rc = virtio_fixed_intr_setup(sp);
+	return (DDI_SUCCESS);
+}
+
+
+static int
+virtionet_intr_teardown(virtionet_state_t *sp)
+{
+	int			rc;
+
+	rc = virtio_intr_teardown(sp);
+	return (DDI_SUCCESS);
 }
 
 
@@ -543,11 +607,21 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
+
+	rc = virtionet_intr_setup(sp);
+	if (rc != DDI_SUCCESS) {
+		virtionet_vq_teardown(sp);
+		ddi_regs_map_free(&sp->hdrhandle);
+		ddi_soft_state_free(virtionet_statep, instance);
+		return (DDI_FAILURE);
+	}
+
 	/* XXX Should we move it to mc_start() ? */
 	VIRTIO_DEV_DRIVER_OK(sp);
 
 	rc = virtionet_mac_register(sp);
 	if (rc != DDI_SUCCESS) {
+		(void) virtionet_intr_teardown(sp);
 		virtionet_vq_teardown(sp);
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
@@ -585,6 +659,7 @@ virtionet_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
+	(void) virtionet_intr_teardown(sp);
 	virtionet_vq_teardown(sp);
 	ddi_regs_map_free(&sp->hdrhandle);
 	ddi_soft_state_free(virtionet_statep, instance);
