@@ -506,7 +506,7 @@ virtio_vq_teardown(virtqueue_t *vqp)
 
 
 static int
-virtio_fixed_intr_setup(virtionet_state_t *sp)
+virtio_fixed_intr_setup(virtionet_state_t *sp, ddi_intr_handler_t inthandler)
 {
 	int			rc;
 	int			nintr;
@@ -543,7 +543,7 @@ virtio_fixed_intr_setup(virtionet_state_t *sp)
 		return (DDI_FAILURE);
 	}
 
-	rc = ddi_intr_add_handler(sp->ihandle, virtionet_intr, sp, NULL);
+	rc = ddi_intr_add_handler(sp->ihandle, inthandler, sp, NULL);
 	if (rc != DDI_SUCCESS) {
 		(void) ddi_intr_free(sp->ihandle);
 		return (DDI_FAILURE);
@@ -621,7 +621,7 @@ virtionet_intr_setup(virtionet_state_t *sp)
 	if (itypes & DDI_INTR_TYPE_FIXED) {
 		cmn_err(CE_NOTE, "Detected FIXED interrupt support");
 	}
-	rc = virtio_fixed_intr_setup(sp);
+	rc = virtio_fixed_intr_setup(sp, virtionet_intr);
 	return (DDI_SUCCESS);
 }
 
