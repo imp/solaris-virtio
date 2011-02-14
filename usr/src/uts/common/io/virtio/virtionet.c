@@ -49,6 +49,7 @@ typedef struct {
 	dev_info_t		*dip;
 	caddr_t			hdraddr;
 	ddi_acc_handle_t	hdrhandle;
+	virtio_net_config_t	*devcfg;
 	virtqueue_t		*rxq;
 	virtqueue_t		*txq;
 	virtqueue_t		*ctlq;
@@ -89,6 +90,29 @@ typedef struct {
 
 static void *virtionet_statep;
 
+static void
+virtionet_link_status(virtionet_state_t *sp)
+{
+	link_state_t		link;
+
+	/*
+	 * If the status field is supported read the link status there,
+	 * otherwise link state "should be assumed active".
+	 */
+	if (sp->features & VIRTIO_NET_F_STATUS) {
+		if (sp->devcfg->status & VIRTIO_NET_S_LINK_UP) {
+			link = LINK_STATE_UP;
+		} else {
+			link = LINK_STATE_DOWN;
+		}
+	} else {
+		link = LINK_STATE_UP;
+	}
+
+	mac_link_update(sp->mh, link);
+}
+
+
 /*
  * MAC callbacks
  */
@@ -109,7 +133,9 @@ virtionet_start(void *arg)
 	VIRTIO_DEV_DRIVER_OK(sp);
 	cmn_err(CE_CONT, "virtionet_start\n");
 
-	return (ENODEV);
+	virtionet_link_status(sp);
+
+	return (0);
 }
 
 static void
@@ -646,6 +672,13 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
+
+	/*
+	 * The device specific portion is *always* in guest native mode,
+	 * so it can be accessed directly, w/o ddi_get()/ddi_put() machinery.
+	 */
+	sp->devcfg =
+	    (virtio_net_config_t *)(sp->hdraddr + VIRTIO_DEVICE_SPECIFIC);
 
 	/* Reset device - we are going to re-negotiate feature set */
 	VIRTIO_DEV_RESET(sp);

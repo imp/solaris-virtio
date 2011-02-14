@@ -60,6 +60,9 @@
 #define	VIRTIO_QUEUE_NOTIFY		0x00000010	/* RW */
 #define	VIRTIO_DEVICE_STATUS		0x00000012	/* RW */
 #define	VIRTIO_ISR_STATUS		0x00000013	/* RW */
+#define	VIRTIO_MSIX_CONFIG_VECTOR	0x00000014	/* RW */
+#define	VIRTIO_MSIX_QUEUE_VECTOR	0x00000016	/* RW */
+#define	VIRTIO_DEVICE_SPECIFIC		0x00000018
 
 
 /* Virtio device-independent features */
@@ -93,6 +96,14 @@
 #define	VIRTIO_NET_F_CTRL_VQ		0x00020000U
 #define	VIRTIO_NET_F_CTRL_RX		0x00040000U
 #define	VIRTIO_NET_F_CTRL_VLAN		0x00080000U
+
+/* Virtio network device configuration status field bits */
+#define	VIRTIO_NET_S_LINK_UP		0x0001
+
+typedef struct virtio_net_config {
+	uint8_t		mac[6];
+	uint16_t	status;
+} virtio_net_config_t;
 
 
 /* Virtio block device features */
