@@ -105,6 +105,9 @@ typedef struct virtio_net_config {
 	uint16_t	status;
 } virtio_net_config_t;
 
+/* Offsets for the above struct */
+#define	VIRTIO_NET_CFG_MAC		0x0000
+#define	VIRTIO_NET_CFG_STATUS		0x0006
 
 /* Virtio block device features */
 #define	VIRTIO_BLK_F_BARRIER		0x00000001

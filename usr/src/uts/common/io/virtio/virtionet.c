@@ -49,7 +49,8 @@ typedef struct {
 	dev_info_t		*dip;
 	caddr_t			hdraddr;
 	ddi_acc_handle_t	hdrhandle;
-	virtio_net_config_t	*devcfg;
+	caddr_t			devaddr;
+	ddi_acc_handle_t	devhandle;
 	virtqueue_t		*rxq;
 	virtqueue_t		*txq;
 	virtqueue_t		*ctlq;
@@ -100,7 +101,11 @@ virtionet_link_status(virtionet_state_t *sp)
 	 * otherwise link state "should be assumed active".
 	 */
 	if (sp->features & VIRTIO_NET_F_STATUS) {
-		if (sp->devcfg->status & VIRTIO_NET_S_LINK_UP) {
+		uint16_t	status;
+
+		status = ddi_get16(sp->devhandle,
+		    (uint16_t *)(sp->devaddr + VIRTIO_NET_CFG_STATUS));
+		if (status & VIRTIO_NET_S_LINK_UP) {
 			link = LINK_STATE_UP;
 		} else {
 			link = LINK_STATE_DOWN;
@@ -109,6 +114,7 @@ virtionet_link_status(virtionet_state_t *sp)
 		link = LINK_STATE_UP;
 	}
 
+	cmn_err(CE_CONT, "Updating link %d\n", link);
 	mac_link_update(sp->mh, link);
 }
 
@@ -422,7 +428,7 @@ static ddi_device_acc_attr_t virtio_devattr = {
 
 
 /* virtqueue buffer access attributes */
-static ddi_device_acc_attr_t virtio_qattr = {
+static ddi_device_acc_attr_t virtio_native_attr = {
 	.devacc_attr_version		= DDI_DEVICE_ATTR_V0,
 	.devacc_attr_endian_flags	= DDI_NEVERSWAP_ACC,
 	.devacc_attr_dataorder		= DDI_STRICTORDER_ACC,
@@ -471,8 +477,9 @@ virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
 		return (NULL);
 	}
 
-	rc = ddi_dma_mem_alloc(vqp->hdl, len, &virtio_qattr, DDI_DMA_CONSISTENT,
-	    DDI_DMA_SLEEP, NULL, &vqp->addr, &vqp->len, &vqp->acchdl);
+	rc = ddi_dma_mem_alloc(vqp->hdl, len, &virtio_native_attr,
+	    DDI_DMA_CONSISTENT, DDI_DMA_SLEEP, NULL, &vqp->addr, &vqp->len,
+	    &vqp->acchdl);
 	if (rc != DDI_SUCCESS) {
 		ddi_dma_free_handle(&vqp->hdl);
 		kmem_free(vqp, sizeof (*vqp));
@@ -666,8 +673,8 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	sp->dip = dip;
 
 	/* Map virtionet PCI header */
-	rc = ddi_regs_map_setup(sp->dip, 1, &sp->hdraddr, 0, 0,
-	    &virtio_devattr, &sp->hdrhandle);
+	rc = ddi_regs_map_setup(sp->dip, 1, &sp->hdraddr, 0,
+	    VIRTIO_DEVICE_SPECIFIC, &virtio_devattr, &sp->hdrhandle);
 	if (rc != DDI_SUCCESS) {
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
@@ -677,8 +684,28 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	 * The device specific portion is *always* in guest native mode,
 	 * so it can be accessed directly, w/o ddi_get()/ddi_put() machinery.
 	 */
+	/* Map virtionet device specific configuration area */
+	off_t	len;
+	if (ddi_dev_regsize(sp->dip, 1, &len) != DDI_SUCCESS) {
+		ddi_regs_map_free(&sp->hdrhandle);
+		ddi_soft_state_free(virtionet_statep, instance);
+		return (DDI_FAILURE);
+	}
+	rc = ddi_regs_map_setup(sp->dip, 1, &sp->devaddr,
+	    VIRTIO_DEVICE_SPECIFIC, len - VIRTIO_DEVICE_SPECIFIC,
+	    &virtio_devattr, &sp->devhandle);
+	if (rc != DDI_SUCCESS) {
+		ddi_regs_map_free(&sp->hdrhandle);
+		ddi_soft_state_free(virtionet_statep, instance);
+		return (DDI_FAILURE);
+	}
+
+	cmn_err(CE_CONT, "PCI header %p, device specific %p\n",
+	    sp->hdraddr, sp->devaddr);
+/*
 	sp->devcfg =
 	    (virtio_net_config_t *)(sp->hdraddr + VIRTIO_DEVICE_SPECIFIC);
+*/
 
 	/* Reset device - we are going to re-negotiate feature set */
 	VIRTIO_DEV_RESET(sp);
@@ -688,6 +715,7 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	rc = virtio_validate_netdev(sp);
 	if (rc != DDI_SUCCESS) {
+		ddi_regs_map_free(&sp->devhandle);
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
@@ -697,6 +725,7 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	rc = virtionet_negotiate_features(sp);
 	if (rc != DDI_SUCCESS) {
+		ddi_regs_map_free(&sp->devhandle);
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
@@ -704,6 +733,7 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	rc = virtionet_vq_setup(sp);
 	if (rc != DDI_SUCCESS) {
+		ddi_regs_map_free(&sp->devhandle);
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
@@ -712,6 +742,7 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	rc = virtionet_intr_setup(sp);
 	if (rc != DDI_SUCCESS) {
 		virtionet_vq_teardown(sp);
+		ddi_regs_map_free(&sp->devhandle);
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
@@ -721,6 +752,7 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	if (rc != DDI_SUCCESS) {
 		(void) virtionet_intr_teardown(sp);
 		virtionet_vq_teardown(sp);
+		ddi_regs_map_free(&sp->devhandle);
 		ddi_regs_map_free(&sp->hdrhandle);
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
@@ -759,6 +791,7 @@ virtionet_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 	(void) virtionet_intr_teardown(sp);
 	virtionet_vq_teardown(sp);
+	ddi_regs_map_free(&sp->devhandle);
 	ddi_regs_map_free(&sp->hdrhandle);
 	ddi_soft_state_free(virtionet_statep, instance);
 
