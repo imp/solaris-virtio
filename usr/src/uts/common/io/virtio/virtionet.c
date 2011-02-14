@@ -106,6 +106,9 @@ virtionet_start(void *arg)
 {
 	virtionet_state_t	*sp = arg;
 
+	VIRTIO_DEV_DRIVER_OK(sp);
+	cmn_err(CE_CONT, "virtionet_start\n");
+
 	return (ENODEV);
 }
 
@@ -114,12 +117,15 @@ virtionet_stop(void *arg)
 {
 	virtionet_state_t	*sp = arg;
 
+	cmn_err(CE_CONT, "virtionet_stop\n");
 }
 
 static int
 virtionet_setpromisc(void *arg, boolean_t promisc_mode)
 {
 	virtionet_state_t	*sp = arg;
+
+	cmn_err(CE_CONT, "virtionet_setpromisc\n");
 
 	return (0);
 }
@@ -129,6 +135,8 @@ virtionet_multicst(void *arg, boolean_t add, const uint8_t *mcast_addr)
 {
 	virtionet_state_t	*sp = arg;
 
+	cmn_err(CE_CONT, "virtionet_multicst\n");
+
 	return (0);
 }
 
@@ -137,6 +145,8 @@ virtionet_unicst(void *arg, const uint8_t *ucast_addr)
 {
 	virtionet_state_t	*sp = arg;
 
+	cmn_err(CE_CONT, "virtionet_unicst\n");
+
 	return (0);
 }
 
@@ -144,6 +154,8 @@ static mblk_t *
 virtionet_tx(void *arg, mblk_t *mp_chain)
 {
 	virtionet_state_t	*sp = arg;
+
+	cmn_err(CE_CONT, "virtionet_tx\n");
 
 	return (NULL);
 }
@@ -154,20 +166,29 @@ virtionet_ioctl(void *arg, queue_t *q, mblk_t *mp)
 {
 	virtionet_state_t	*sp = arg;
 
+	cmn_err(CE_CONT, "virtionet_ioctl\n");
 }
 
 static boolean_t
 virtionet_getcapab(void *arg, mac_capab_t cap, void *cap_data)
 {
 	virtionet_state_t	*sp = arg;
+	boolean_t		result;
 
 	switch (cap) {
 	case MAC_CAPAB_HCKSUM:
+		cmn_err(CE_CONT, "virtionet_start\n");
+		result = B_FALSE;
+		break;
 	case MAC_CAPAB_LSO:
+		cmn_err(CE_CONT, "virtionet_start\n");
+		result = B_FALSE;
+		break;
 	default:
-		return (B_FALSE);
+		cmn_err(CE_WARN, "Unexpected capability %X", cap);
+		result = B_FALSE;
 	}
-	return (B_TRUE);
+	return (result);
 }
 
 static int
@@ -662,9 +683,6 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		ddi_soft_state_free(virtionet_statep, instance);
 		return (DDI_FAILURE);
 	}
-
-	/* XXX Should we move it to mc_start() ? */
-	VIRTIO_DEV_DRIVER_OK(sp);
 
 	rc = virtionet_mac_register(sp);
 	if (rc != DDI_SUCCESS) {
