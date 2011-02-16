@@ -51,6 +51,9 @@ typedef struct {
 	ddi_acc_handle_t	hdrhandle;
 	caddr_t			devaddr;
 	ddi_acc_handle_t	devhandle;
+	uint16_t		rxqsz;
+	uint16_t		txqsz;
+	uint16_t		ctlqsz;
 	virtqueue_t		*rxq;
 	virtqueue_t		*txq;
 	virtqueue_t		*ctlq;
@@ -224,9 +227,16 @@ virtionet_getcapab(void *arg, mac_capab_t cap, void *cap_data)
 	return (result);
 }
 
+
+#define	VIRTIONET_PROP_FEATURES		"_features"
+#define	VIRTIONET_PROP_RECVQSIZE	"_receiveqsize"
+#define	VIRTIONET_PROP_XMITQSIZE	"_transmitqsize"
+#define	VIRTIONET_PROP_CTRLQSIZE	"_controlqsize"
+
+
 static int
-virtionet_setprop(void *arg, const char *prop_name, mac_prop_id_t prop_id,
-	uint_t prop_val_size, const void *prop_val)
+virtionet_setprop(void *arg, const char *prop_name, mac_prop_id_t pid,
+	uint_t pvalsize, const void *pval)
 {
 	virtionet_state_t	*sp = arg;
 
@@ -234,20 +244,53 @@ virtionet_setprop(void *arg, const char *prop_name, mac_prop_id_t prop_id,
 }
 
 static int
-virtionet_getprop(void *arg, const char *prop_name, mac_prop_id_t prop_id,
-	uint_t prop_val_size, void *prop_val)
+virtionet_getprop(void *arg, const char *pname, mac_prop_id_t pid,
+	uint_t pvalsize, void *pval)
 {
 	virtionet_state_t	*sp = arg;
+	int			rc = 0;
 
-	return (ENOTSUP);
+	switch (pid) {
+	case MAC_PROP_DUPLEX:
+	case MAC_PROP_SPEED:
+		*(link_duplex_t *)(pval) = LINK_DUPLEX_FULL;
+		break;
+	case MAC_PROP_PRIVATE:
+		ASSERT(pvalsize >= sizeof (uint32_t));
+		if (strcmp(pname, VIRTIONET_PROP_FEATURES) == 0) {
+			*((uint32_t *)pval) = sp->features;
+		} else if (strcmp(pname, VIRTIONET_PROP_RECVQSIZE) == 0) {
+			*((uint32_t *)pval) = sp->rxqsz;
+		} else if (strcmp(pname, VIRTIONET_PROP_XMITQSIZE) == 0) {
+			*((uint32_t *)pval) = sp->txqsz;
+		} else if (strcmp(pname, VIRTIONET_PROP_CTRLQSIZE) == 0) {
+			*((uint32_t *)pval) = sp->ctlqsz;
+		}
+	default:
+		rc = ENOTSUP;
+	}
+	return (rc);
 }
 
 static void
-virtionet_propinfo(void *arg, const char *prop_name, mac_prop_id_t prop_id,
-	mac_prop_info_handle_t prop_handle)
+virtionet_propinfo(void *arg, const char *pname, mac_prop_id_t pid,
+	mac_prop_info_handle_t ph)
 {
 	virtionet_state_t	*sp = arg;
 
+	switch (pid) {
+	case MAC_PROP_DUPLEX:
+	case MAC_PROP_SPEED:
+		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
+		break;
+	case MAC_PROP_PRIVATE:
+		cmn_err(CE_CONT, "propinfo(%s)\n", pname);
+		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
+		mac_prop_info_set_default_uint32(ph, 0);
+		break;
+	default:
+		cmn_err(CE_CONT, "propinfo(%d)\n", pid);
+	}
 }
 
 
@@ -267,6 +310,15 @@ static mac_callbacks_t virtionet_mac_callbacks = {
 	.mc_setprop	= virtionet_setprop,
 	.mc_getprop	= virtionet_getprop,
 	.mc_propinfo	= virtionet_propinfo
+};
+
+
+static char *virtionet_priv_props[] = {
+	VIRTIONET_PROP_FEATURES,
+	VIRTIONET_PROP_RECVQSIZE,
+	VIRTIONET_PROP_XMITQSIZE,
+	VIRTIONET_PROP_CTRLQSIZE,
+	NULL
 };
 
 
@@ -292,6 +344,7 @@ virtionet_mac_register(virtionet_state_t *sp)
 	mp->m_min_sdu		= 0;
 	mp->m_max_sdu		= ETHERMTU;
 	mp->m_margin		= VLAN_TAGSZ;
+	mp->m_priv_props	= virtionet_priv_props;
 
 	rc = mac_register(mp, &sp->mh);
 	mac_free(mp);
@@ -586,9 +639,20 @@ virtio_intr_teardown(virtionet_state_t *sp)
 static int
 virtionet_vq_setup(virtionet_state_t *sp)
 {
-	sp->rxq = virtio_vq_setup(sp, 0x100);
-	sp->txq = virtio_vq_setup(sp, 0x100);
-	sp->ctlq = virtio_vq_setup(sp, 0x10);
+	/* Receive queue */
+	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 0);
+	sp->rxqsz = VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE);
+	sp->rxq = virtio_vq_setup(sp, sp->rxqsz);
+
+	/* Transmit queue */
+	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 1);
+	sp->txqsz = VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE);
+	sp->txq = virtio_vq_setup(sp, sp->txqsz);
+
+	/* Control queue */
+	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 2);
+	sp->ctlqsz = VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE);
+	sp->ctlq = virtio_vq_setup(sp, sp->ctlqsz);
 
 	if ((sp->rxq == NULL) || (sp->txq == NULL) || (sp->ctlq == NULL)) {
 		virtio_vq_teardown(sp->rxq);
