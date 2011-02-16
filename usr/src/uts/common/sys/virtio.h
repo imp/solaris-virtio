@@ -79,7 +79,8 @@
 
 
 /* ISR bits */
-#define	VIRTIO_ISR_INTR			0x01
+#define	VIRTIO_ISR_VQ			0x01
+#define	VIRTIO_ISR_CFG			0x02
 
 
 /* Virtio network device features */

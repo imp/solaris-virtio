@@ -505,7 +505,16 @@ virtionet_intr(caddr_t arg1, caddr_t arg2)
 	/* Autoclears the ISR */
 	intr = VIRTIO_ISR(sp);
 
-	if (intr & VIRTIO_ISR_INTR) {
+	if (intr) {
+		cmn_err(CE_NOTE, "intr=0x%X", intr);
+		if (intr & VIRTIO_ISR_VQ) {
+			/* VQ update */
+		} else if (intr & VIRTIO_ISR_CFG) {
+			/* Configuration update */
+		} else {
+			cmn_err(CE_WARN, "Unknown interrupt 0x%X",
+			    (intr & 0xFC));
+		}
 		return (DDI_INTR_CLAIMED);
 	} else {
 		return (DDI_INTR_UNCLAIMED);
