@@ -78,6 +78,10 @@
 #define	VIRTIO_DEV_STATUS_FAILED	0x80
 
 
+/* ISR bits */
+#define	VIRTIO_ISR_INTR			0x01
+
+
 /* Virtio network device features */
 #define	VIRTIO_NET_F_CSUM		0x00000001U
 #define	VIRTIO_NET_F_GUEST_CSUM		0x00000002U

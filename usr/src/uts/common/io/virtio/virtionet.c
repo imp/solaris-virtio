@@ -88,6 +88,7 @@ typedef struct {
 #define	VIRTIO_DEV_FAILED(sp)	\
 	VIRTIO_PUT8(sp, VIRTIO_DEVICE_STATUS, VIRTIO_DEV_STATUS_FAILED)
 
+#define	VIRTIO_ISR(sp)	VIRTIO_GET8(sp, VIRTIO_ISR_STATUS)
 
 static void *virtionet_statep;
 
@@ -414,7 +415,11 @@ virtionet_intr(caddr_t arg1, caddr_t arg2)
 {
 	virtionet_state_t	*sp = (virtionet_state_t *)arg1;
 
-	return (DDI_INTR_UNCLAIMED);
+	if (VIRTIO_ISR(sp) & VIRTIO_ISR_INTR) {
+		return (DDI_INTR_CLAIMED);
+	} else {
+		return (DDI_INTR_UNCLAIMED);
+	}
 }
 
 
