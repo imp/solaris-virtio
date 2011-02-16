@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <sys/cmn_err.h>
 #include <sys/debug.h>
+#include <sys/errno.h>
 #include <sys/pci.h>
 #include <sys/note.h>
 #include <sys/conf.h>
@@ -119,7 +120,6 @@ virtionet_link_status(virtionet_state_t *sp)
 		link = LINK_STATE_UP;
 	}
 
-	cmn_err(CE_CONT, "Updating link %d\n", link);
 	mac_link_update(sp->mh, link);
 }
 
@@ -214,15 +214,12 @@ virtionet_getcapab(void *arg, mac_capab_t cap, void *cap_data)
 
 	switch (cap) {
 	case MAC_CAPAB_HCKSUM:
-		cmn_err(CE_CONT, "virtionet_start\n");
 		result = B_FALSE;
 		break;
 	case MAC_CAPAB_LSO:
-		cmn_err(CE_CONT, "virtionet_start\n");
 		result = B_FALSE;
 		break;
 	default:
-		cmn_err(CE_WARN, "Unexpected capability %X", cap);
 		result = B_FALSE;
 	}
 	return (result);
@@ -244,6 +241,31 @@ virtionet_setprop(void *arg, const char *prop_name, mac_prop_id_t pid,
 	return (ENOTSUP);
 }
 
+/* XXX Need to change to from uint32_t to strings */
+static int
+virtionet_priv_getprop(virtionet_state_t *sp, const char *pname,
+	uint_t pvalsize, void *pval)
+{
+	int			rc = 0;
+
+	ASSERT(pvalsize >= sizeof (uint32_t));
+
+	if (strcmp(pname, VIRTIONET_PROP_FEATURES) == 0) {
+		*((uint32_t *)pval) = sp->features;
+	} else if (strcmp(pname, VIRTIONET_PROP_RECVQSIZE) == 0) {
+		*((uint32_t *)pval) = sp->rxqsz;
+	} else if (strcmp(pname, VIRTIONET_PROP_XMITQSIZE) == 0) {
+		*((uint32_t *)pval) = sp->txqsz;
+	} else if (strcmp(pname, VIRTIONET_PROP_CTRLQSIZE) == 0) {
+		*((uint32_t *)pval) = sp->ctlqsz;
+	} else {
+		rc = ENOTSUP;
+	}
+
+	return (rc);
+}
+
+
 static int
 virtionet_getprop(void *arg, const char *pname, mac_prop_id_t pid,
 	uint_t pvalsize, void *pval)
@@ -257,22 +279,31 @@ virtionet_getprop(void *arg, const char *pname, mac_prop_id_t pid,
 		*(link_duplex_t *)(pval) = LINK_DUPLEX_FULL;
 		break;
 	case MAC_PROP_PRIVATE:
-		ASSERT(pvalsize >= sizeof (uint32_t));
-		if (strcmp(pname, VIRTIONET_PROP_FEATURES) == 0) {
-			*((uint32_t *)pval) = sp->features;
-		} else if (strcmp(pname, VIRTIONET_PROP_RECVQSIZE) == 0) {
-			*((uint32_t *)pval) = sp->rxqsz;
-		} else if (strcmp(pname, VIRTIONET_PROP_XMITQSIZE) == 0) {
-			*((uint32_t *)pval) = sp->txqsz;
-		} else if (strcmp(pname, VIRTIONET_PROP_CTRLQSIZE) == 0) {
-			*((uint32_t *)pval) = sp->ctlqsz;
-		}
+		rc = virtionet_priv_getprop(sp, pname, pvalsize, pval);
 		break;
 	default:
 		rc = ENOTSUP;
 	}
 	return (rc);
 }
+
+
+static void
+virtionet_priv_propinfo(virtionet_state_t *sp, const char *pname,
+	mac_prop_info_handle_t ph)
+{
+	mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
+	if ((strcmp(pname, VIRTIONET_PROP_FEATURES) == 0) ||
+	    (strcmp(pname, VIRTIONET_PROP_RECVQSIZE) == 0) ||
+	    (strcmp(pname, VIRTIONET_PROP_XMITQSIZE) == 0) ||
+	    (strcmp(pname, VIRTIONET_PROP_CTRLQSIZE) == 0)) {
+		mac_prop_info_set_default_uint32(ph, 0);
+	} else {
+		cmn_err(CE_NOTE, "Unexpected private property %s",
+		    pname);
+	}
+}
+
 
 static void
 virtionet_propinfo(void *arg, const char *pname, mac_prop_id_t pid,
@@ -287,19 +318,11 @@ virtionet_propinfo(void *arg, const char *pname, mac_prop_id_t pid,
 		break;
 	case MAC_PROP_PRIVATE:
 		cmn_err(CE_CONT, "private propinfo(%s)\n", pname);
-		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
-		if ((strcmp(pname, VIRTIONET_PROP_FEATURES) == 0) ||
-		    (strcmp(pname, VIRTIONET_PROP_RECVQSIZE) == 0) ||
-		    (strcmp(pname, VIRTIONET_PROP_XMITQSIZE) == 0) ||
-		    (strcmp(pname, VIRTIONET_PROP_CTRLQSIZE) == 0)) {
-			mac_prop_info_set_default_uint32(ph, 0);
-		} else {
-			cmn_err(CE_NOTE, "Unexpected private property %s",
-			    pname);
-		}
+		virtionet_priv_propinfo(sp, pname, ph);
 		break;
 	default:
-		cmn_err(CE_CONT, "propinfo(%d)\n", pid);
+		/* Do we need to do anything in this case ? */
+		;
 	}
 }
 
