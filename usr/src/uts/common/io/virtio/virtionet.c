@@ -19,6 +19,7 @@
 
 #include <sys/types.h>
 #include <sys/cmn_err.h>
+#include <sys/debug.h>
 #include <sys/pci.h>
 #include <sys/note.h>
 #include <sys/conf.h>
@@ -467,8 +468,12 @@ static uint_t
 virtionet_intr(caddr_t arg1, caddr_t arg2)
 {
 	virtionet_state_t	*sp = (virtionet_state_t *)arg1;
+	uint8_t			intr;
 
-	if (VIRTIO_ISR(sp) & VIRTIO_ISR_INTR) {
+	/* Autoclears the ISR */
+	intr = VIRTIO_ISR(sp);
+
+	if (intr & VIRTIO_ISR_INTR) {
 		return (DDI_INTR_CLAIMED);
 	} else {
 		return (DDI_INTR_UNCLAIMED);
