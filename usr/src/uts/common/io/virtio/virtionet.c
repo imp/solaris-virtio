@@ -275,8 +275,14 @@ virtionet_getprop(void *arg, const char *pname, mac_prop_id_t pid,
 
 	switch (pid) {
 	case MAC_PROP_DUPLEX:
+		cmn_err(CE_CONT, "MAC_PROP_DUPLEX\n");
+		ASSERT(pvalsize == sizeof (link_duplex_t));
+		*(link_duplex_t *)pval = LINK_DUPLEX_FULL;
+		break;
 	case MAC_PROP_SPEED:
-		*(link_duplex_t *)(pval) = LINK_DUPLEX_FULL;
+		cmn_err(CE_CONT, "MAC_PROP_SPEED\n");
+		ASSERT(pvalsize == sizeof (uint64_t));
+		*(uint64_t *)pval = 1000 * 1000 * 1000;
 		break;
 	case MAC_PROP_PRIVATE:
 		rc = virtionet_priv_getprop(sp, pname, pvalsize, pval);
@@ -313,7 +319,9 @@ virtionet_propinfo(void *arg, const char *pname, mac_prop_id_t pid,
 
 	switch (pid) {
 	case MAC_PROP_DUPLEX:
+		cmn_err(CE_CONT, "propinfo(MAC_PROP_DUPLEX)\n");
 	case MAC_PROP_SPEED:
+		cmn_err(CE_CONT, "propinfo(MAC_PROP_SPEED)\n");
 		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
 		break;
 	case MAC_PROP_PRIVATE:
