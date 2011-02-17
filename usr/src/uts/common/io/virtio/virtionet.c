@@ -642,16 +642,16 @@ static ddi_dma_attr_t vq_dma_attr = {
 	.dma_attr_addr_hi		= 0xFFFFFFFFU,
 	.dma_attr_count_max		= 0xFFFFFFFFU,
 	.dma_attr_align			= 4096,
-	.dma_attr_burstsizes		= 0x3F,		/* XXX */
-	.dma_attr_minxfer		= 1,		/* XXX */
-	.dma_attr_maxxfer		= 0xFFFFFFFFU,	/* XXX */
-	.dma_attr_seg			= 0xFFFFFFFFU,	/* XXX */
-	.dma_attr_sgllen		= 1,		/* XXX */
-	.dma_attr_granular		= 1,		/* XXX */
+	.dma_attr_burstsizes		= 1,
+	.dma_attr_minxfer		= 1,
+	.dma_attr_maxxfer		= 0xFFFFFFFFU,
+	.dma_attr_seg			= 0xFFFFFFFFU,
+	.dma_attr_sgllen		= 1,
+	.dma_attr_granular		= 1,
 	.dma_attr_flags			= DDI_DMA_FORCE_PHYSICAL
 };
 
-#define	FULL_PAGES(x)
+
 static virtqueue_t *
 virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
 {
