@@ -224,8 +224,9 @@ virtionet_start(void *arg)
 {
 	virtionet_state_t	*sp = arg;
 
-	VIRTIO_DEV_DRIVER_OK(sp);
 	cmn_err(CE_CONT, "virtionet_start\n");
+
+	VIRTIO_DEV_DRIVER_OK(sp);
 
 	mac_link_update(sp->mh, virtionet_link_status(sp));
 
@@ -585,6 +586,31 @@ virtionet_negotiate_features(virtionet_state_t *sp)
 		/* otherwise report failure to negotiate anything */
 		return (DDI_FAILURE);
 	}
+}
+
+
+static void
+virtionet_get_macaddr(virtionet_state_t *sp)
+{
+	if (sp->features & VIRTIO_NET_F_MAC) {
+		ddi_rep_get8(sp->devhandle, sp->addr,
+		    (uint8_t *)(sp->devaddr + VIRTIO_NET_CFG_MAC),
+		    ETHERADDRL, DDI_DEV_AUTOINCR);
+	} else {
+		/* TODO Should be random, but hardcoded for now */
+		sp->addr[0] = 0;
+		sp->addr[1] = 1;
+		sp->addr[2] = 2;
+		sp->addr[3] = 3;
+		sp->addr[4] = 4;
+		sp->addr[5] = 5;
+	}
+
+#if defined(DEBUG)
+	cmn_err(CE_NOTE, "Using mac address = %x:%x:%x:%x:%x:%x",
+	    sp->addr[0], sp->addr[1], sp->addr[2],
+	    sp->addr[3], sp->addr[4], sp->addr[5]);
+#endif
 }
 
 
@@ -962,6 +988,8 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
+	virtionet_get_macaddr(sp);
+	
 	rc = virtionet_vq_setup(sp);
 	if (rc != DDI_SUCCESS) {
 		ddi_regs_map_free(&sp->devhandle);

@@ -62,7 +62,7 @@
 #define	VIRTIO_ISR_STATUS		0x00000013	/* RW */
 #define	VIRTIO_MSIX_CONFIG_VECTOR	0x00000014	/* RW */
 #define	VIRTIO_MSIX_QUEUE_VECTOR	0x00000016	/* RW */
-#define	VIRTIO_DEVICE_SPECIFIC		0x00000018
+#define	VIRTIO_DEVICE_SPECIFIC		0x00000014	/* Or 0x18 */
 
 
 /* Virtio device-independent features */
