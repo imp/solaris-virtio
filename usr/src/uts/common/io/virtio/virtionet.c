@@ -97,7 +97,7 @@ typedef struct {
 
 static void *virtionet_statep;
 
-static void
+static link_state_t
 virtionet_link_status(virtionet_state_t *sp)
 {
 	link_state_t		link;
@@ -120,7 +120,7 @@ virtionet_link_status(virtionet_state_t *sp)
 		link = LINK_STATE_UP;
 	}
 
-	mac_link_update(sp->mh, link);
+	return (link);
 }
 
 
@@ -218,7 +218,7 @@ virtionet_start(void *arg)
 	VIRTIO_DEV_DRIVER_OK(sp);
 	cmn_err(CE_CONT, "virtionet_start\n");
 
-	virtionet_link_status(sp);
+	mac_link_update(sp->mh, virtionet_link_status(sp));
 
 	return (0);
 }
@@ -342,24 +342,26 @@ virtionet_priv_getprop(virtionet_state_t *sp, const char *pname,
 
 static int
 virtionet_getprop(void *arg, const char *pname, mac_prop_id_t pid,
-	uint_t pvalsize, void *pval)
+	uint_t psize, void *pval)
 {
 	virtionet_state_t	*sp = arg;
 	int			rc = 0;
 
 	switch (pid) {
 	case MAC_PROP_DUPLEX:
-		cmn_err(CE_CONT, "MAC_PROP_DUPLEX\n");
-		ASSERT(pvalsize == sizeof (link_duplex_t));
+		ASSERT(psize >= sizeof (link_duplex_t));
 		*(link_duplex_t *)pval = LINK_DUPLEX_FULL;
 		break;
 	case MAC_PROP_SPEED:
-		cmn_err(CE_CONT, "MAC_PROP_SPEED\n");
-		ASSERT(pvalsize == sizeof (uint64_t));
+		ASSERT(psize >= sizeof (uint64_t));
 		*(uint64_t *)pval = 1000 * 1000 * 1000;
 		break;
+	case MAC_PROP_STATUS:
+		ASSERT(psize >= sizeof (link_state_t));
+		*(link_state_t *)pval = virtionet_link_status(sp);
+		break;
 	case MAC_PROP_PRIVATE:
-		rc = virtionet_priv_getprop(sp, pname, pvalsize, pval);
+		rc = virtionet_priv_getprop(sp, pname, psize, pval);
 		break;
 	default:
 		rc = ENOTSUP;
@@ -393,9 +395,8 @@ virtionet_propinfo(void *arg, const char *pname, mac_prop_id_t pid,
 
 	switch (pid) {
 	case MAC_PROP_DUPLEX:
-		cmn_err(CE_CONT, "propinfo(MAC_PROP_DUPLEX)\n");
 	case MAC_PROP_SPEED:
-		cmn_err(CE_CONT, "propinfo(MAC_PROP_SPEED)\n");
+	case MAC_PROP_STATUS:
 		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
 		break;
 	case MAC_PROP_PRIVATE:
