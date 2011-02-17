@@ -31,6 +31,7 @@
 #include <sys/mac_ether.h>
 #include <sys/ethernet.h>
 #include <sys/virtio.h>
+#include <sys/virtio_ring.h>
 #include <sys/ddi_intr.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
@@ -44,8 +45,16 @@ typedef struct {
 	size_t			len;
 	ddi_dma_cookie_t	cookie;
 	uint_t			ccount;
-} virtqueue_t;
+} virtqueue_dma_t;
 
+typedef struct {
+	uint16_t		vq_num;
+	uint16_t		vq_size;
+	virtqueue_dma_t		vq_dma;
+	vring_desc_t		*vr_desc;
+	vring_avail_t		*vr_avail;
+	vring_used_t		*vr_used;
+} virtqueue_t;
 
 typedef struct {
 	dev_info_t		*dip;
@@ -642,25 +651,39 @@ static ddi_dma_attr_t vq_dma_attr = {
 	.dma_attr_flags			= DDI_DMA_FORCE_PHYSICAL
 };
 
-
+#define	FULL_PAGES(x)
 static virtqueue_t *
 virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
 {
 	virtqueue_t		*vqp = NULL;
-	size_t			len = qsize * 16; /* XXX FIX ME */
+	size_t			len = 2 * 4096; /* XXX FIX ME !!! */
+	size_t			desc_size;
+	size_t			avail_size;
+	size_t			used_size;
+	size_t			part1;
+	size_t			part2;
 	int			rc;
+
+	desc_size = VRING_DTABLE_SIZE(qsize);
+	avail_size = VRING_AVAIL_SIZE(qsize);
+	used_size = VRING_USED_SIZE(qsize);
+
+	part1 = VRING_ROUNDUP(desc_size + avail_size);
+	part2 = VRING_ROUNDUP(used_size);
+
+	len = part1 + part2;
 
 	vqp = kmem_zalloc(sizeof (*vqp), KM_SLEEP);
 
 	vq_dma_attr.dma_attr_flags |= DDI_DMA_FORCE_PHYSICAL;
 
 	rc = ddi_dma_alloc_handle(sp->dip, &vq_dma_attr, DDI_DMA_SLEEP,
-	    NULL, &vqp->hdl);
+	    NULL, &vqp->vq_dma.hdl);
 
 	if (rc == DDI_DMA_BADATTR) {
 		vq_dma_attr.dma_attr_flags &= (~DDI_DMA_FORCE_PHYSICAL);
 		rc = ddi_dma_alloc_handle(sp->dip, &vq_dma_attr, DDI_DMA_SLEEP,
-		    NULL, &vqp->hdl);
+		    NULL, &vqp->vq_dma.hdl);
 	}
 
 	if (rc != DDI_SUCCESS) {
@@ -668,24 +691,30 @@ virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
 		return (NULL);
 	}
 
-	rc = ddi_dma_mem_alloc(vqp->hdl, len, &virtio_native_attr,
-	    DDI_DMA_CONSISTENT, DDI_DMA_SLEEP, NULL, &vqp->addr, &vqp->len,
-	    &vqp->acchdl);
+	rc = ddi_dma_mem_alloc(vqp->vq_dma.hdl, len, &virtio_native_attr,
+	    DDI_DMA_CONSISTENT, DDI_DMA_SLEEP, NULL, &vqp->vq_dma.addr,
+	    &vqp->vq_dma.len, &vqp->vq_dma.acchdl);
 	if (rc != DDI_SUCCESS) {
-		ddi_dma_free_handle(&vqp->hdl);
+		ddi_dma_free_handle(&vqp->vq_dma.hdl);
 		kmem_free(vqp, sizeof (*vqp));
 		return (NULL);
 	}
 
-	rc = ddi_dma_addr_bind_handle(vqp->hdl, NULL, vqp->addr, vqp->len,
-	    DDI_DMA_RDWR | DDI_DMA_CONSISTENT, DDI_DMA_SLEEP, NULL,
-	    &vqp->cookie, &vqp->ccount);
+	rc = ddi_dma_addr_bind_handle(vqp->vq_dma.hdl, NULL, vqp->vq_dma.addr,
+	    vqp->vq_dma.len, DDI_DMA_RDWR | DDI_DMA_CONSISTENT, DDI_DMA_SLEEP,
+	    NULL, &vqp->vq_dma.cookie, &vqp->vq_dma.ccount);
 	if (rc != DDI_DMA_MAPPED) {
-		ddi_dma_mem_free(&vqp->acchdl);
-		ddi_dma_free_handle(&vqp->hdl);
+		ddi_dma_mem_free(&vqp->vq_dma.acchdl);
+		ddi_dma_free_handle(&vqp->vq_dma.hdl);
 		kmem_free(vqp, sizeof (*vqp));
 		return (NULL);
 	}
+	ASSERT(&vqp->vq_dma.ccount == 1);
+
+	vqp->vq_size = qsize;
+	vqp->vr_desc = (vring_desc_t *)vqp->vq_dma.addr;
+	vqp->vr_avail = (vring_avail_t *)(vqp->vq_dma.addr + desc_size);
+	vqp->vr_used = (vring_used_t *)(vqp->vq_dma.addr + part1);
 
 	return (vqp);
 }
@@ -695,9 +724,9 @@ static void
 virtio_vq_teardown(virtqueue_t *vqp)
 {
 	if (vqp != NULL) {
-		(void) ddi_dma_unbind_handle(vqp->hdl);
-		ddi_dma_mem_free(&vqp->acchdl);
-		ddi_dma_free_handle(&vqp->hdl);
+		(void) ddi_dma_unbind_handle(vqp->vq_dma.hdl);
+		ddi_dma_mem_free(&vqp->vq_dma.acchdl);
+		ddi_dma_free_handle(&vqp->vq_dma.hdl);
 		kmem_free(vqp, sizeof (*vqp));
 	}
 }
