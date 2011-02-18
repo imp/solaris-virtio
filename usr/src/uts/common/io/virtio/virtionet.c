@@ -62,9 +62,6 @@ typedef struct {
 	ddi_acc_handle_t	hdrhandle;
 	caddr_t			devaddr;
 	ddi_acc_handle_t	devhandle;
-	uint16_t		rxqsz;
-	uint16_t		txqsz;
-	uint16_t		ctlqsz;
 	virtqueue_t		*rxq;
 	virtqueue_t		*txq;
 	virtqueue_t		*ctlq;
@@ -337,11 +334,11 @@ virtionet_priv_getprop(virtionet_state_t *sp, const char *pname,
 	if (strcmp(pname, VIRTIONET_PROP_FEATURES) == 0) {
 		*((uint32_t *)pval) = sp->features;
 	} else if (strcmp(pname, VIRTIONET_PROP_RECVQSIZE) == 0) {
-		*((uint32_t *)pval) = sp->rxqsz;
+		*((uint32_t *)pval) = sp->rxq->vq_size;
 	} else if (strcmp(pname, VIRTIONET_PROP_XMITQSIZE) == 0) {
-		*((uint32_t *)pval) = sp->txqsz;
+		*((uint32_t *)pval) = sp->txq->vq_size;
 	} else if (strcmp(pname, VIRTIONET_PROP_CTRLQSIZE) == 0) {
-		*((uint32_t *)pval) = sp->ctlqsz;
+		*((uint32_t *)pval) = sp->ctlq->vq_size;
 	} else {
 		rc = ENOTSUP;
 	}
@@ -552,16 +549,22 @@ virtio_validate_netdev(virtionet_state_t *sp)
 	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 0);
 	cmn_err(CE_CONT, "Queue size 0x%X\n",
 	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
+	cmn_err(CE_CONT, "Queue address 0x%X\n",
+	    VIRTIO_GET16(sp, VIRTIO_QUEUE_ADDRESS));
 
 	cmn_err(CE_CONT, "Selecting queue 1\n");
 	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 1);
 	cmn_err(CE_CONT, "Queue size 0x%X\n",
 	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
+	cmn_err(CE_CONT, "Queue address 0x%X\n",
+	    VIRTIO_GET16(sp, VIRTIO_QUEUE_ADDRESS));
 
 	cmn_err(CE_CONT, "Selecting queue 2\n");
 	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 2);
 	cmn_err(CE_CONT, "Queue size 0x%X\n",
 	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
+	cmn_err(CE_CONT, "Queue address 0x%X\n",
+	    VIRTIO_GET16(sp, VIRTIO_QUEUE_ADDRESS));
 
 	return (DDI_SUCCESS);
 }
@@ -679,10 +682,10 @@ static ddi_dma_attr_t vq_dma_attr = {
 
 
 static virtqueue_t *
-virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
+virtio_vq_setup(virtionet_state_t *sp, int queue)
 {
 	virtqueue_t		*vqp = NULL;
-	size_t			len = 2 * 4096; /* XXX FIX ME !!! */
+	size_t			len;
 	size_t			desc_size;
 	size_t			avail_size;
 	size_t			used_size;
@@ -690,16 +693,23 @@ virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
 	size_t			part2;
 	int			rc;
 
-	desc_size = VRING_DTABLE_SIZE(qsize);
-	avail_size = VRING_AVAIL_SIZE(qsize);
-	used_size = VRING_USED_SIZE(qsize);
+	vqp = kmem_zalloc(sizeof (*vqp), KM_SLEEP);
+
+	/* save the queue number */
+	vqp->vq_num = queue;
+
+	/* Get the queue size */
+	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, queue);
+	vqp->vq_size = VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE);
+
+	desc_size = VRING_DTABLE_SIZE(vqp->vq_size);
+	avail_size = VRING_AVAIL_SIZE(vqp->vq_size);
+	used_size = VRING_USED_SIZE(vqp->vq_size);
 
 	part1 = VRING_ROUNDUP(desc_size + avail_size);
 	part2 = VRING_ROUNDUP(used_size);
 
 	len = part1 + part2;
-
-	vqp = kmem_zalloc(sizeof (*vqp), KM_SLEEP);
 
 	vq_dma_attr.dma_attr_flags |= DDI_DMA_FORCE_PHYSICAL;
 
@@ -737,19 +747,25 @@ virtio_vq_setup(virtionet_state_t *sp, uint16_t qsize)
 	}
 	ASSERT(&vqp->vq_dma.ccount == 1);
 
-	vqp->vq_size = qsize;
 	vqp->vr_desc = (vring_desc_t *)vqp->vq_dma.addr;
 	vqp->vr_avail = (vring_avail_t *)(vqp->vq_dma.addr + desc_size);
 	vqp->vr_used = (vring_used_t *)(vqp->vq_dma.addr + part1);
+
+	VIRTIO_PUT32(sp, VIRTIO_QUEUE_ADDRESS, vqp->vq_dma.cookie.dmac_address);
 
 	return (vqp);
 }
 
 
 static void
-virtio_vq_teardown(virtqueue_t *vqp)
+virtio_vq_teardown(virtionet_state_t *sp, virtqueue_t *vqp)
 {
 	if (vqp != NULL) {
+		/* Clear the device notion of the virtqueue */
+		VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, vqp->vq_num);
+		VIRTIO_PUT32(sp, VIRTIO_QUEUE_ADDRESS, 0);
+
+		/* Release allocated system resources */
 		(void) ddi_dma_unbind_handle(vqp->vq_dma.hdl);
 		ddi_dma_mem_free(&vqp->vq_dma.acchdl);
 		ddi_dma_free_handle(&vqp->vq_dma.hdl);
@@ -824,43 +840,34 @@ virtio_intr_teardown(virtionet_state_t *sp)
 }
 
 
+static void
+virtionet_vq_teardown(virtionet_state_t *sp)
+{
+	virtio_vq_teardown(sp, sp->rxq);
+	virtio_vq_teardown(sp, sp->txq);
+	virtio_vq_teardown(sp, sp->ctlq);
+	sp->rxq = sp->txq = sp->ctlq = NULL;
+}
+
+
 static int
 virtionet_vq_setup(virtionet_state_t *sp)
 {
 	/* Receive queue */
-	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 0);
-	sp->rxqsz = VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE);
-	sp->rxq = virtio_vq_setup(sp, sp->rxqsz);
+	sp->rxq = virtio_vq_setup(sp, 0);
 
 	/* Transmit queue */
-	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 1);
-	sp->txqsz = VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE);
-	sp->txq = virtio_vq_setup(sp, sp->txqsz);
+	sp->txq = virtio_vq_setup(sp, 1);
 
 	/* Control queue */
-	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 2);
-	sp->ctlqsz = VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE);
-	sp->ctlq = virtio_vq_setup(sp, sp->ctlqsz);
+	sp->ctlq = virtio_vq_setup(sp, 2);
 
 	if ((sp->rxq == NULL) || (sp->txq == NULL) || (sp->ctlq == NULL)) {
-		virtio_vq_teardown(sp->rxq);
-		virtio_vq_teardown(sp->txq);
-		virtio_vq_teardown(sp->ctlq);
-		sp->rxq = sp->txq = sp->ctlq = NULL;
+		virtionet_vq_teardown(sp);
 		return (DDI_FAILURE);
 	}
 
 	return (DDI_SUCCESS);
-}
-
-
-static void
-virtionet_vq_teardown(virtionet_state_t *sp)
-{
-	virtio_vq_teardown(sp->rxq);
-	virtio_vq_teardown(sp->txq);
-	virtio_vq_teardown(sp->ctlq);
-	sp->rxq = sp->txq = sp->ctlq = NULL;
 }
 
 
