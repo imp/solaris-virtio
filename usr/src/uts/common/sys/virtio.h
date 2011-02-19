@@ -114,6 +114,42 @@ typedef struct virtio_net_config {
 #define	VIRTIO_NET_CFG_MAC		0x0000
 #define	VIRTIO_NET_CFG_STATUS		0x0006
 
+/* Network packet header for Rx and Tx queues */
+typedef struct virtio_net_hdr {
+	uint8_t		flags;
+	uint8_t		gso_type;
+	uint16_t	hdr_len;
+	uint16_t	gso_size;
+	uint16_t	csum_start;
+	uint16_t	csum_offset;
+/* Only if VIRTIO_NET_F_MRG_RXBUF: */
+	uint16_t	num_buffers;
+} virtio_net_hdr_t;
+
+/* virtio_net_hdr.flags */
+/* This packet requires calculation of the checksum */
+#define	VIRTIO_NET_HDR_F_NEEDS_CSUM	1
+
+/* virtio_net_hdr.gso_types */
+#define	VIRTIO_NET_HDR_GSO_NONE		0
+#define	VIRTIO_NET_HDR_GSO_TCPV4	1
+#define	VIRTIO_NET_HDR_GSO_UDP		3
+#define	VIRTIO_NET_HDR_GSO_TCPV6	4
+#define	VIRTIO_NET_HDR_GSO_ECN		0x80
+
+/* Control queue commands */
+typedef struct virtio_net_ctrl {
+	uint8_t		class;
+	uint8_t		command;
+	uint8_t		command_specific_data[1]; /* Variable size */
+	uint8_t		ack;
+} virtio_net_ctrl_t;
+
+/* Ack values for device to report back */
+#define	VIRTIO_NET_OK			0
+#define	VIRTIO_NET_ERR			1
+
+
 /* Virtio block device features */
 #define	VIRTIO_BLK_F_BARRIER		0x00000001
 #define	VIRTIO_BLK_F_SIZE_MAX		0x00000002
