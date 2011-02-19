@@ -617,6 +617,18 @@ virtionet_get_macaddr(virtionet_state_t *sp)
 }
 
 
+/* Check the status of the virtqueue */
+static void
+virtionet_check_vq(virtionet_state_t *sp, virtqueue_t *vqp)
+{
+	ddi_dma_sync(vqp->vq_dma.hdl, 0, 0, DDI_DMA_SYNC_FORKERNEL);
+	cmn_err(CE_CONT, "Avail [flags=0x%x, idx=%d] \n",
+	    vqp->vr_avail->flags, vqp->vr_avail->idx);
+	cmn_err(CE_CONT, "Used [flags=0x%x, idx=%d]\n",
+	    vqp->vr_used->flags, vqp->vr_used->idx);
+}
+
+
 static uint_t
 virtionet_intr(caddr_t arg1, caddr_t arg2)
 {
@@ -631,10 +643,14 @@ virtionet_intr(caddr_t arg1, caddr_t arg2)
 		if (intr & VIRTIO_ISR_VQ) {
 			/* VQ update */
 			intr &= (~VIRTIO_ISR_VQ);
+			virtionet_check_vq(sp, sp->rxq);
+			virtionet_check_vq(sp, sp->txq);
+			virtionet_check_vq(sp, sp->ctlq);
 		}
 		if (intr & VIRTIO_ISR_CFG) {
 			/* Configuration update */
 			intr &= (~VIRTIO_ISR_CFG);
+			mac_link_update(sp->mh, virtionet_link_status(sp));
 		}
 		/* Let us know if there is still something interrupting */
 		if (intr) {
@@ -717,6 +733,8 @@ virtio_vq_setup(virtionet_state_t *sp, int queue)
 	    NULL, &vqp->vq_dma.hdl);
 
 	if (rc == DDI_DMA_BADATTR) {
+		cmn_err(CE_NOTE, "Failed to allocate physical DMA; "
+		    "failing back to virtual DMA");
 		vq_dma_attr.dma_attr_flags &= (~DDI_DMA_FORCE_PHYSICAL);
 		rc = ddi_dma_alloc_handle(sp->dip, &vq_dma_attr, DDI_DMA_SLEEP,
 		    NULL, &vqp->vq_dma.hdl);
@@ -736,6 +754,8 @@ virtio_vq_setup(virtionet_state_t *sp, int queue)
 		return (NULL);
 	}
 
+	bzero(vqp->vq_dma.addr, vqp->vq_dma.len);
+
 	rc = ddi_dma_addr_bind_handle(vqp->vq_dma.hdl, NULL, vqp->vq_dma.addr,
 	    vqp->vq_dma.len, DDI_DMA_RDWR | DDI_DMA_CONSISTENT, DDI_DMA_SLEEP,
 	    NULL, &vqp->vq_dma.cookie, &vqp->vq_dma.ccount);
@@ -752,7 +772,7 @@ virtio_vq_setup(virtionet_state_t *sp, int queue)
 	vqp->vr_used = (vring_used_t *)(vqp->vq_dma.addr + part1);
 
 	VIRTIO_PUT32(sp, VIRTIO_QUEUE_ADDRESS,
-	    vqp->vq_dma.cookie.dmac_address / 4096);
+	    vqp->vq_dma.cookie.dmac_address / VIRTIO_VQ_PCI_ALIGN);
 
 	return (vqp);
 }
