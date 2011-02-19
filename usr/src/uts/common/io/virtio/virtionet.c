@@ -751,7 +751,8 @@ virtio_vq_setup(virtionet_state_t *sp, int queue)
 	vqp->vr_avail = (vring_avail_t *)(vqp->vq_dma.addr + desc_size);
 	vqp->vr_used = (vring_used_t *)(vqp->vq_dma.addr + part1);
 
-	VIRTIO_PUT32(sp, VIRTIO_QUEUE_ADDRESS, vqp->vq_dma.cookie.dmac_address);
+	VIRTIO_PUT32(sp, VIRTIO_QUEUE_ADDRESS,
+	    vqp->vq_dma.cookie.dmac_address / 4096);
 
 	return (vqp);
 }
