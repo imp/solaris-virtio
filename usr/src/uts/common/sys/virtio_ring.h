@@ -78,12 +78,12 @@ typedef struct vring_used_elem {
 } vring_used_elem_t;
 
 typedef struct vring_used {
-	uint16_t	flags;
+	uint16_t	flags;		/* Flags; see below */
 	uint16_t	idx;
 	vring_used_elem_t	ring[1];
 } vring_used_t;
 
-/* Similar to the vring_avail - means device need not out notification */
+/* Similar to the vring_avail - means device needs not our notification */
 #define	VRING_USED_F_NO_NOTIFY		0x0001
 
 #define	VRING_DTABLE_SIZE(n)	(sizeof (vring_desc_t) * n)

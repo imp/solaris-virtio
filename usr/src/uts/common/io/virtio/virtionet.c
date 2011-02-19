@@ -30,11 +30,14 @@
 #include <sys/mac_provider.h>
 #include <sys/mac_ether.h>
 #include <sys/ethernet.h>
+#include <sys/stream.h>
+#include <sys/strsun.h>
 #include <sys/virtio.h>
 #include <sys/virtio_ring.h>
 #include <sys/ddi_intr.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
+#include <sys/ddidmareq.h>
 
 #include "virtionet.h"
 
@@ -45,12 +48,12 @@ typedef struct {
 	size_t			len;
 	ddi_dma_cookie_t	cookie;
 	uint_t			ccount;
-} virtqueue_dma_t;
+} virtionet_dma_t;
 
 typedef struct {
 	uint16_t		vq_num;
 	uint16_t		vq_size;
-	virtqueue_dma_t		vq_dma;
+	virtionet_dma_t		vq_dma;
 	vring_desc_t		*vr_desc;
 	vring_avail_t		*vr_avail;
 	vring_used_t		*vr_used;
@@ -65,6 +68,9 @@ typedef struct {
 	virtqueue_t		*rxq;
 	virtqueue_t		*txq;
 	virtqueue_t		*ctlq;
+	virtionet_dma_t		*rxbuf;
+	virtionet_dma_t		*txbuf;
+	virtionet_dma_t		*ctlbuf;
 	ddi_intr_handle_t	ihandle;
 	uint32_t		features;
 	mac_handle_t		mh;
@@ -127,6 +133,36 @@ virtionet_link_status(virtionet_state_t *sp)
 	}
 
 	return (link);
+}
+
+
+/* Enqueue a single packet 'mp' for sending */
+static boolean_t
+virtionet_send(virtionet_state_t *sp, mblk_t *mp)
+{
+	void			*buf;
+	size_t			mlen;
+	int			idx;
+
+	ASSERT(mp != NULL);
+
+	mlen = msgsize(mp);
+
+	ASSERT(mlen <= 2048);
+
+	cmn_err(CE_CONT, "Sending message of %d bytes\n", mlen);
+
+	idx = sp->txq->vr_avail->idx;
+	buf = sp->txbuf->addr + idx * 2048;
+	mcopymsg(mp, buf);
+	sp->txq->vr_desc[idx].len = mlen;
+
+	ddi_dma_sync(sp->txbuf->hdl, idx * 2048, mlen, DDI_DMA_SYNC_FORDEV);
+	sp->txq->vr_avail->idx++;
+	/* The next is suboptimal, should calculate exact offset/size */
+	ddi_dma_sync(sp->txq->vq_dma.hdl, 0, 0, DDI_DMA_SYNC_FORDEV);
+
+	return (B_TRUE);
 }
 
 
@@ -269,13 +305,23 @@ virtionet_unicst(void *arg, const uint8_t *ucast_addr)
 }
 
 static mblk_t *
-virtionet_tx(void *arg, mblk_t *mp_chain)
+virtionet_tx(void *arg, mblk_t *mp)
 {
 	virtionet_state_t	*sp = arg;
+	mblk_t			*next;
 
 	cmn_err(CE_CONT, "virtionet_tx\n");
 
-	return (NULL);
+	while (mp != NULL) {
+		next = mp->b_next;
+		mp->b_next = NULL;
+		if (virtionet_send(sp, mp) != B_TRUE) {
+			mp->b_next = next;
+			break;
+		}
+		mp = next;
+	}
+	return (mp);
 }
 
 
@@ -861,9 +907,77 @@ virtio_intr_teardown(virtionet_state_t *sp)
 }
 
 
+static virtionet_dma_t *
+virtionet_dma_setup(virtionet_state_t *sp, size_t len)
+{
+	virtionet_dma_t		*dmap;
+	int			rc;
+
+	dmap = kmem_zalloc(sizeof (*dmap), KM_SLEEP);
+
+	vq_dma_attr.dma_attr_flags |= DDI_DMA_FORCE_PHYSICAL;
+
+	rc = ddi_dma_alloc_handle(sp->dip, &vq_dma_attr, DDI_DMA_SLEEP,
+	    NULL, &dmap->hdl);
+
+	if (rc == DDI_DMA_BADATTR) {
+		cmn_err(CE_NOTE, "Failed to allocate physical DMA; "
+		    "failing back to virtual DMA");
+		vq_dma_attr.dma_attr_flags &= (~DDI_DMA_FORCE_PHYSICAL);
+		rc = ddi_dma_alloc_handle(sp->dip, &vq_dma_attr, DDI_DMA_SLEEP,
+		    NULL, &dmap->hdl);
+	}
+
+	if (rc != DDI_SUCCESS) {
+		kmem_free(dmap, sizeof (*dmap));
+		return (NULL);
+	}
+
+	rc = ddi_dma_mem_alloc(dmap->hdl, len, &virtio_native_attr,
+	    DDI_DMA_CONSISTENT, DDI_DMA_SLEEP, NULL, &dmap->addr,
+	    &dmap->len, &dmap->acchdl);
+	if (rc != DDI_SUCCESS) {
+		ddi_dma_free_handle(&dmap->hdl);
+		kmem_free(dmap, sizeof (*dmap));
+		return (NULL);
+	}
+
+	bzero(dmap->addr, dmap->len);
+
+	rc = ddi_dma_addr_bind_handle(dmap->hdl, NULL, dmap->addr,
+	    dmap->len, DDI_DMA_RDWR | DDI_DMA_STREAMING, DDI_DMA_SLEEP,
+	    NULL, &dmap->cookie, &dmap->ccount);
+	if (rc != DDI_DMA_MAPPED) {
+		ddi_dma_mem_free(&dmap->acchdl);
+		ddi_dma_free_handle(&dmap->hdl);
+		kmem_free(dmap, sizeof (*dmap));
+		return (NULL);
+	}
+	ASSERT(&dmap->ccount == 1);
+
+	return (dmap);
+}
+
+
+static void
+virtionet_dma_teardown(virtionet_dma_t *dmap)
+{
+	if (dmap != NULL) {
+		/* Release allocated system resources */
+		(void) ddi_dma_unbind_handle(dmap->hdl);
+		ddi_dma_mem_free(&dmap->acchdl);
+		ddi_dma_free_handle(&dmap->hdl);
+		kmem_free(dmap, sizeof (*dmap));
+	}
+}
+
+
 static void
 virtionet_vq_teardown(virtionet_state_t *sp)
 {
+	virtionet_dma_teardown(sp->rxbuf);
+	virtionet_dma_teardown(sp->txbuf);
+	virtionet_dma_teardown(sp->ctlbuf);
 	virtio_vq_teardown(sp, sp->rxq);
 	virtio_vq_teardown(sp, sp->txq);
 	virtio_vq_teardown(sp, sp->ctlq);
@@ -883,10 +997,60 @@ virtionet_vq_setup(virtionet_state_t *sp)
 	/* Control queue */
 	sp->ctlq = virtio_vq_setup(sp, 2);
 
-	if ((sp->rxq == NULL) || (sp->txq == NULL) || (sp->ctlq == NULL)) {
+	if ((sp->rxq == NULL) ||
+	    (sp->txq == NULL) ||
+	    (sp->ctlq == NULL)) {
 		virtionet_vq_teardown(sp);
 		return (DDI_FAILURE);
 	}
+
+	/* Allocate buffers */
+	/* XXX Fix the size - needs to be aligned with the max frame size */
+	sp->rxbuf = virtionet_dma_setup(sp, sp->rxq->vq_size * 2048);
+	sp->txbuf = virtionet_dma_setup(sp, sp->txq->vq_size * 2048);
+	/* Control messages are smaller */
+	sp->ctlbuf = virtionet_dma_setup(sp, sp->ctlq->vq_size * 128);
+
+	if ((sp->rxbuf == NULL) ||
+	    (sp->txbuf == NULL) ||
+	    (sp->ctlbuf == NULL)) {
+		virtionet_vq_teardown(sp);
+		return (DDI_FAILURE);
+	}
+
+	/* Initialize virtqueue rings */
+	/* Rx VQ ring */
+	for (int i = 0; i < sp->rxq->vq_size; i++) {
+		sp->rxq->vr_desc[i].addr =
+		    sp->rxbuf->cookie.dmac_laddress + i * 2048;
+		sp->rxq->vr_desc[i].len = 2048;
+		sp->rxq->vr_desc[i].flags = VRING_DESC_F_WRITE;
+		sp->rxq->vr_desc[i].next = 0;
+	}
+
+	sp->rxq->vr_avail->idx = 0;
+
+	/* Tx VQ ring */
+	for (int i = 0; i < sp->txq->vq_size; i++) {
+		sp->txq->vr_desc[i].addr =
+		    sp->txbuf->cookie.dmac_laddress + i * 2048;
+		sp->txq->vr_desc[i].len = 2048;
+		sp->txq->vr_desc[i].flags = 0;
+		sp->txq->vr_desc[i].next = 0;
+	}
+
+	sp->txq->vr_avail->idx = 0;
+
+	/* Control VQ ring */
+	for (int i = 0; i < sp->ctlq->vq_size; i++) {
+		sp->ctlq->vr_desc[i].addr =
+		    sp->ctlbuf->cookie.dmac_laddress + i * 128;
+		sp->ctlq->vr_desc[i].len = 128;
+		sp->ctlq->vr_desc[i].flags = 0;
+		sp->ctlq->vr_desc[i].next = 0;
+	}
+
+	sp->ctlq->vr_avail->idx = 0;
 
 	return (DDI_SUCCESS);
 }
