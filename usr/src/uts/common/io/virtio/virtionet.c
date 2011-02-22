@@ -429,7 +429,7 @@ virtionet_priv_propinfo(virtionet_state_t *sp, const char *pname,
 	    (strcmp(pname, VIRTIONET_PROP_RECVQSIZE) == 0) ||
 	    (strcmp(pname, VIRTIONET_PROP_XMITQSIZE) == 0) ||
 	    (strcmp(pname, VIRTIONET_PROP_CTRLQSIZE) == 0)) {
-		mac_prop_info_set_default_uint32(ph, 0);
+		mac_prop_info_set_default_str(ph, "0x0");
 	} else {
 		cmn_err(CE_NOTE, "Unexpected private property %s",
 		    pname);
@@ -450,7 +450,6 @@ virtionet_propinfo(void *arg, const char *pname, mac_prop_id_t pid,
 		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
 		break;
 	case MAC_PROP_PRIVATE:
-		cmn_err(CE_CONT, "private propinfo(%s)\n", pname);
 		virtionet_priv_propinfo(sp, pname, ph);
 		break;
 	default:
