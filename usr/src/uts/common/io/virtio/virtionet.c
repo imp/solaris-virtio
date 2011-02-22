@@ -368,23 +368,20 @@ virtionet_setprop(void *arg, const char *prop_name, mac_prop_id_t pid,
 	return (ENOTSUP);
 }
 
-/* XXX Need to change to from uint32_t to strings */
 static int
 virtionet_priv_getprop(virtionet_state_t *sp, const char *pname,
 	uint_t pvalsize, void *pval)
 {
 	int			rc = 0;
 
-	ASSERT(pvalsize >= sizeof (uint32_t));
-
 	if (strcmp(pname, VIRTIONET_PROP_FEATURES) == 0) {
-		*((uint32_t *)pval) = sp->features;
+		(void) snprintf(pval, pvalsize, "0x%x", sp->features);
 	} else if (strcmp(pname, VIRTIONET_PROP_RECVQSIZE) == 0) {
-		*((uint32_t *)pval) = sp->rxq->vq_size;
+		(void) snprintf(pval, pvalsize, "0x%x", sp->rxq->vq_size);
 	} else if (strcmp(pname, VIRTIONET_PROP_XMITQSIZE) == 0) {
-		*((uint32_t *)pval) = sp->txq->vq_size;
+		(void) snprintf(pval, pvalsize, "0x%x", sp->txq->vq_size);
 	} else if (strcmp(pname, VIRTIONET_PROP_CTRLQSIZE) == 0) {
-		*((uint32_t *)pval) = sp->ctlq->vq_size;
+		(void) snprintf(pval, pvalsize, "0x%x", sp->ctlq->vq_size);
 	} else {
 		rc = ENOTSUP;
 	}
@@ -1181,7 +1178,7 @@ virtionet_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	}
 
 	virtionet_get_macaddr(sp);
-	
+
 	rc = virtionet_vq_setup(sp);
 	if (rc != DDI_SUCCESS) {
 		ddi_regs_map_free(&sp->devhandle);
