@@ -587,27 +587,6 @@ virtio_validate_netdev(virtionet_state_t *sp)
 	cmn_err(CE_CONT, "ISR Status 0x%X\n",
 	    VIRTIO_GET8(sp, VIRTIO_ISR_STATUS));
 
-	cmn_err(CE_CONT, "Selecting queue 0\n");
-	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 0);
-	cmn_err(CE_CONT, "Queue size 0x%X\n",
-	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
-	cmn_err(CE_CONT, "Queue address 0x%X\n",
-	    VIRTIO_GET16(sp, VIRTIO_QUEUE_ADDRESS));
-
-	cmn_err(CE_CONT, "Selecting queue 1\n");
-	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 1);
-	cmn_err(CE_CONT, "Queue size 0x%X\n",
-	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
-	cmn_err(CE_CONT, "Queue address 0x%X\n",
-	    VIRTIO_GET16(sp, VIRTIO_QUEUE_ADDRESS));
-
-	cmn_err(CE_CONT, "Selecting queue 2\n");
-	VIRTIO_PUT16(sp, VIRTIO_QUEUE_SELECT, 2);
-	cmn_err(CE_CONT, "Queue size 0x%X\n",
-	    VIRTIO_GET16(sp, VIRTIO_QUEUE_SIZE));
-	cmn_err(CE_CONT, "Queue address 0x%X\n",
-	    VIRTIO_GET16(sp, VIRTIO_QUEUE_ADDRESS));
-
 	return (DDI_SUCCESS);
 }
 
