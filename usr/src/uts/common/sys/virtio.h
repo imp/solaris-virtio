@@ -122,9 +122,13 @@ typedef struct virtio_net_hdr {
 	uint16_t	gso_size;
 	uint16_t	csum_start;
 	uint16_t	csum_offset;
-/* Only if VIRTIO_NET_F_MRG_RXBUF: */
-	uint16_t	num_buffers;
 } virtio_net_hdr_t;
+
+/* Only if VIRTIO_NET_F_MRG_RXBUF: */
+typedef struct virtio_net_hdr_rxbuf {
+	virtio_net_hdr_t	_hdr;
+	uint16_t		num_buffers;
+} virtio_net_hdr_rxbuf_t;
 
 /* virtio_net_hdr.flags */
 /* This packet requires calculation of the checksum */
