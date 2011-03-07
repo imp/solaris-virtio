@@ -786,7 +786,7 @@ virtio_vq_setup(virtionet_state_t *sp, int queue)
 		kmem_free(vqp, sizeof (*vqp));
 		return (NULL);
 	}
-	ASSERT(&vqp->vq_dma.ccount == 1);
+	ASSERT(vqp->vq_dma.ccount == 1);
 
 	vqp->vr_desc = (vring_desc_t *)vqp->vq_dma.addr;
 	vqp->vr_avail = (vring_avail_t *)(vqp->vq_dma.addr + desc_size);
@@ -836,7 +836,7 @@ virtio_fixed_intr_setup(virtionet_state_t *sp, ddi_intr_handler_t inthandler)
 		return (DDI_FAILURE);
 	}
 
-	ASSERT(actual == 1);
+	ASSERT(nintr == 1);
 
 	rc = ddi_intr_get_pri(sp->ihandle, &pri);
 	if (rc != DDI_SUCCESS) {
@@ -928,7 +928,7 @@ virtionet_dma_setup(virtionet_state_t *sp, size_t len)
 		kmem_free(dmap, sizeof (*dmap));
 		return (NULL);
 	}
-	ASSERT(&dmap->ccount == 1);
+	ASSERT(dmap->ccount == 1);
 
 	return (dmap);
 }
