@@ -643,9 +643,9 @@ static void
 virtionet_check_vq(virtionet_state_t *sp, virtqueue_t *vqp)
 {
 	ddi_dma_sync(vqp->vq_dma.hdl, 0, 0, DDI_DMA_SYNC_FORKERNEL);
-	cmn_err(CE_CONT, "Avail [flags=0x%x, idx=%d] \n",
+	cmn_err(CE_CONT, "Avail [flags=0x%x, idx=%d]\n",
 	    vqp->vr_avail->flags, vqp->vr_avail->idx);
-	cmn_err(CE_CONT, "Used [flags=0x%x, idx=%d]\n",
+	cmn_err(CE_CONT, "Used  [flags=0x%x, idx=%d]\n",
 	    vqp->vr_used->flags, vqp->vr_used->idx);
 }
 
@@ -659,8 +659,9 @@ virtionet_intr(caddr_t arg1, caddr_t arg2)
 	/* Autoclears the ISR */
 	intr = VIRTIO_ISR(sp);
 
+	cmn_err(CE_NOTE, "intr=0x%X", (int)intr);
+
 	if (intr) {
-		cmn_err(CE_NOTE, "intr=0x%X", intr);
 		if (intr & VIRTIO_ISR_VQ) {
 			/* VQ update */
 			intr &= (~VIRTIO_ISR_VQ);
@@ -843,9 +844,6 @@ virtio_fixed_intr_setup(virtionet_state_t *sp, ddi_intr_handler_t inthandler)
 		(void) ddi_intr_free(sp->ihandle);
 		return (DDI_FAILURE);
 	}
-
-	cmn_err(CE_NOTE, "Supported interrupt priority = %d(%d)",
-	    pri, ddi_intr_get_hilevel_pri());
 
 	/* Test for high level mutex */
 	if (pri >= ddi_intr_get_hilevel_pri()) {
